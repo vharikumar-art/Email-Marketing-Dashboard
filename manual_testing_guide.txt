@@ -1,0 +1,142 @@
+# Manual Testing Guide - Email Dashboard API
+
+This guide provides step-by-step instructions for testing each API endpoint. Use tools like **Postman**, **Insomnia**, or the built-in Swagger UI (`/docs`).
+
+---
+
+## 1. Authentication & Initialization
+
+### Step 1: Initialize Super Admin
+- **Endpoint**: `POST /init-super-admin`
+- **Body**:
+  ```json
+  {
+    "email": "superadmin@example.com",
+    "password": "SecurePassword123",
+    "full_name": "John Doe"
+  }
+  ```
+- **Goal**: Create the first Super Admin. Succeeds only if no users with Admin role exist.
+
+### Step 2: Login (Employee Role)
+- **Endpoint**: `POST /login`
+- **Goal**: Receive an `access_token` immediately.
+
+### Step 3: Login (Admin or Manager Role)
+- **Endpoint**: `POST /login`
+- **Response**: `{"otp_required": true, "email": "..."}`
+- **Goal**: Trigger OTP generation. Check server logs for the 6-digit OTP.
+
+### Step 4: Verify OTP (Admin/Manager Only)
+- **Endpoint**: `POST /verify-otp`
+- **Body**:
+  ```json
+  {
+    "email": "admin@example.com",
+    "otp": "123456"
+  }
+  ```
+- **Goal**: Receive the final `access_token` after valid OTP entry.
+
+---
+
+## 2. Admin & User Management (Role-Based)
+
+### Create a User/Admin (Admin or Manager Required)
+- **Endpoint**: `POST /users`
+- **Header**: `Authorization: Bearer <token>`
+- **Body**:
+  ```json
+  {
+    "email": "newuser@example.com",
+    "password": "NewPassword123",
+    "full_name": "New User",
+    "role": "manager" 
+  }
+  ```
+- **Rules**:
+  - Role can be `admin`, `manager`, or `employee`.
+  - Only an `admin` can create another `admin` (Max 2 total).
+  - Both `admin` and `manager` can create others.
+
+### View Users/Admins
+- **GET /users**: (Admin/Super Admin) List all regular users.
+- **GET /admins**: (Super Admin Only) List all Admins and Super Admins.
+
+---
+
+## 3. Entity CRUD Operations (Clients, Orders, etc.)
+
+*Note: All follow a similar pattern. Below is an example for Clients.*
+
+### Create a Client
+- **Endpoint**: `POST /clients`
+- **Header**: `Authorization: Bearer <token>`
+- **Body**:
+  ```json
+  {
+    "client_id": "CL-001",
+    "name": "Global Tech Corp",
+    "email": "contact@globaltech.com"
+  }
+  ```
+
+### Link Entities (Verification Flow)
+1. **Create Client** -> Note the `client_id` (e.g., `CL-001`).
+2. **Create Manuscript** -> Use the `client_id` string (e.g., `CL-001`) in the `client_id` field.
+3. **Create Order** -> Use the `client_id` (e.g., `CL-001`) and `manuscript_id` (e.g., `MS-CL-001-1`).
+
+---
+
+## 4. Password Management
+
+### Update Own Password
+- **Endpoint**: `PUT /users/me/password`
+- **Body**: `{"new_password": "NewSecret123"}`
+- **Goal**: Verify you can still log in with the new password.
+
+### Reset Someone Else's Password (Admin/Super Admin)
+- **Endpoint**: `PUT /users/password`
+- **Body**:
+  ```json
+  {
+    "email": "user@example.com",
+    "new_password": "ResetPassword123"
+  }
+  ```
+- **Rules**: 
+  - Admin can reset Users.
+  - Super Admin can reset Admins and Users.
+
+---
+
+## 5. Dashboard (Aggregated View)
+
+### Get Aggregated Order Details
+- **Endpoint**: `GET /dashboard/orders`
+- **Header**: `Authorization: Bearer <token>`
+- **Goal**: Receive a flattened list of orders including client details and payment phase info. Note: The `phase` column is currently empty (None) but is included for future updates.
+
+---
+
+## 6. Payments (Phase Tracking)
+
+### Create a Payment
+- **Endpoint**: `POST /payments`
+- **Body**:
+  ```json
+  {
+    "client_id": "CL-001",
+    "phase": 1,
+    "amount": 500.0,
+    "phase_1_payment": 500.0,
+    "phase_1_payment_date": "2024-04-08T10:00:00"
+  }
+  ```
+- **Goal**: Verify that phase-specific fields (`phase_1_payment`, `phase_2_payment`, etc.) are correctly stored.
+
+---
+
+## 6. Constraint Verification
+- **Test Max 2 Super Admins**: Try to create a 3rd Super Admin via `POST /admins`. It should return a 400 error.
+- **Unauthorized Access**: Attempt to call `GET /admins` with a regular User token. It should return 403 Forbidden.
