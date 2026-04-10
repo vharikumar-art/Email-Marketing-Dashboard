@@ -34,7 +34,8 @@ from config import (
     SMTP_PORT, 
     SMTP_USERNAME, 
     SMTP_PASSWORD, 
-    EMAIL_FROM
+    EMAIL_FROM,
+    ALLOWED_ORIGINS
 )
 from auth import (
     get_password_hash,
@@ -119,7 +120,7 @@ def format_mongo_id(doc):
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
