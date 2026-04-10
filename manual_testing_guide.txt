@@ -63,6 +63,23 @@ This guide provides step-by-step instructions for testing each API endpoint. Use
 - **GET /users**: (Admin/Super Admin) List all regular users.
 - **GET /admins**: (Super Admin Only) List all Admins and Super Admins.
 
+### User Profile Details (Name, Email, Number, Clients)
+- **GET /users/me/details**: (Any logged-in user) Get your own profile, role, and a list of clients you are handling.
+- **GET /users/{email}/details**: (Admin/Manager) Get profile and clients handled by a specific user.
+
+### Manage Employee Permissions (Admin/Manager Only)
+- **Endpoint**: `PUT /users/permissions`
+- **Body**:
+  ```json
+  {
+    "email": "employee@example.com",
+    "permissions": {
+      "dashboard": ["remarks", "client_whatsapp_number", "payment_status"]
+    }
+  }
+  ```
+- **Goal**: Grant an employee specific columns they are allowed to update in the dashboard.
+
 ---
 
 ## 3. Entity CRUD Operations (Clients, Orders, etc.)
@@ -115,7 +132,23 @@ This guide provides step-by-step instructions for testing each API endpoint. Use
 ### Get Aggregated Order Details
 - **Endpoint**: `GET /dashboard/orders`
 - **Header**: `Authorization: Bearer <token>`
-- **Goal**: Receive a flattened list of orders including client details and payment phase info. Note: The `phase` column is currently empty (None) but is included for future updates.
+- **Goal**: Receive a flattened list of orders including client details and payment phase info.
+
+### Update Dashboard Order (Role-Based Column Access)
+- **Endpoint**: `PATCH /dashboard/orders/{order_id}`
+- **Header**: `Authorization: Bearer <token>`
+- **Body**:
+  ```json
+  {
+    "remarks": "Priority client update",
+    "client_whatsapp_number": "+1234567890"
+  }
+  ```
+- **Testing Logic**:
+  1. **As Admin/Manager**: Any field in `DashboardUpdate` can be updated.
+  2. **As Employee**: 
+     - Try updating a field you **have** permission for (mapped in `PUT /users/permissions`). Should succeed.
+     - Try updating a field you **don't** have permission for (e.g., `total_amount`). Should return `403 Forbidden`.
 
 ---
 

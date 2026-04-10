@@ -1,0 +1,87 @@
+# Database Schema & Data Relationships - Email Dashboard
+
+This document provides a detailed overview of the MongoDB collections and the relational structure of the Email Dashboard API.
+
+---
+
+## 1. Collections Overview
+
+### users
+Stores user accounts, roles, and access permissions.
+- **Fields**: `email`, `full_name`, `password` (hashed), `role` (admin/manager/employee), `phone_number` (optional), `permissions` (field-level access).
+
+### clients
+Stores client information.
+- **Fields**: `client_id` (Primary Key), `name`, `location`, `email`, `whatsapp_no`, `client_handler` (links to `users.full_name`), `bank_account`, `affiliation`.
+
+### manuscripts
+Stores records for manuscripts submitted by clients.
+- **Fields**: `manuscript_id` (Primary Key), `title`, `order_type`, `client_id` (Foreign Key -> `clients`).
+
+### orders
+Stores order details for manuscripts.
+- **Fields**: `order_id` (Primary Key), `client_id` (Foreign Key -> `clients`), `manuscript_id` (Foreign Key -> `manuscripts`), `order_date`, `total_amount`, `payment_status`, `remarks`.
+
+### payments
+Stores payment transactions linked to orders.
+- **Fields**: `order_id` (Foreign Key -> `orders`), `client_id` (Foreign Key -> `clients`), `phase` (1, 2, or 3), `amount`, `payment_date`.
+
+### tokens
+Stores active session JWTs.
+- **Fields**: `user_email` (Foreign Key -> `users`), `token`, `created_at`.
+
+### otps
+Temporary storage for 2FA login codes.
+- **Fields**: `email` (Foreign Key -> `users`), `otp`, `created_at`.
+
+---
+
+## 2. Data Relationships
+
+The system maintains referential integrity through logical IDs (e.g., `client_id`) rather than MongoDB ObjectIDs for easier cross-service tracking.
+
+```mermaid
+erDiagram
+    Users ||--o{ Clients : "handled by"
+    Users ||--o{ Tokens : "owns"
+    Users ||--o{ OTPs : "receives"
+    
+    Clients ||--o{ Manuscripts : "submits"
+    Clients ||--o{ Orders : "places"
+    Clients ||--o{ Payments : "makes"
+    
+    Manuscripts ||--o{ Orders : "referenced in"
+    
+    Orders ||--o{ Payments : "has"
+```
+
+### Relationship Details:
+
+1. **User -> Client**:
+   - Relationship: One-to-Many.
+   - Link: `users.full_name` matches `clients.client_handler`.
+   - Purpose: Employees can only view/manage clients assigned to them.
+
+2. **Client -> Manuscript**:
+   - Relationship: One-to-Many.
+   - Link: `clients.client_id` matches `manuscripts.client_id`.
+
+3. **Client -> Order**:
+   - Relationship: One-to-Many.
+   - Link: `clients.client_id` matches `orders.client_id`.
+
+4. **Manuscript -> Order**:
+   - Relationship: One-to-One / One-to-Many (depending on revisions).
+   - Link: `manuscripts.manuscript_id` matches `orders.manuscript_id`.
+
+5. **Order -> Payment**:
+   - Relationship: One-to-Many.
+   - Link: `orders.order_id` matches `payments.order_id`.
+   - Purpose: Tracks multiple payment phases (typically 3 phases) for a single order.
+
+---
+
+## 3. ID Convention
+- **Client ID**: `CL-XXX` (e.g., `CL-001`)
+- **Manuscript ID**: `MS-[Client_ID]-[S_No]` (e.g., `MS-CL-001-1`)
+- **Order ID**: `ORD-[Manuscript_ID]` (e.g., `ORD-MS-CL-001-1`)

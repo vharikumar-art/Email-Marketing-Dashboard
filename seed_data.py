@@ -1,6 +1,7 @@
 import sys
 import os
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 
 # Add the current directory to sys.path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -10,154 +11,184 @@ from database import (
     clients_collection, 
     manuscripts_collection, 
     orders_collection, 
-    payments_collection
+    payments_collection,
+    otps_collection
 )
-from auth import get_password_hash
 from schemas import UserRole
 
-def seed_users():
-    print("Seeding users...")
-    users_collection.delete_many({})
-    users = []
-    # 2 Super Admins
-    for i in range(1, 3):
-        users.append({
-            "email": f"superadmin{i}@example.com",
-            "password": get_password_hash("superadmin123"),
-            "full_name": f"Super Admin {i}",
-            "role": UserRole.ADMIN,
-            "created_at": datetime.utcnow()
-        })
-    # 4 Admins
-    for i in range(1, 5):
-        users.append({
-            "email": f"admin{i}@example.com",
-            "password": get_password_hash("admin123"),
-            "full_name": f"Admin {i}",
-            "role": UserRole.ADMIN,
-            "created_at": datetime.utcnow()
-        })
-    # 6 Users
-    for i in range(1, 7):
-        users.append({
-            "email": f"user{i}@example.com",
-            "password": get_password_hash("user123"),
-            "full_name": f"User {i}",
-            "role": UserRole.EMPLOYEE,
-            "created_at": datetime.utcnow()
-        })
-    users_collection.insert_many(users)
-    print(f"Successfully seeded {len(users)} users.")
-    return [u["email"] for u in users if u["role"] == UserRole.ADMIN]
+def get_existing_handlers():
+    """Fetch names of existing Admin and Manager users to act as client handlers."""
+    users = list(users_collection.find({"role": {"$in": [UserRole.ADMIN, UserRole.MANAGER]}}))
+    if not users:
+        # Fallback if no admins found
+        return ["Default Admin"]
+    return [u["full_name"] for u in users]
 
-def seed_clients(admin_emails):
-    print("Seeding clients...")
+def clear_operational_data():
+    """Clear all collections except users and tokens."""
+    print("Clearing operational collections...")
     clients_collection.delete_many({})
+    manuscripts_collection.delete_many({})
+    orders_collection.delete_many({})
+    payments_collection.delete_many({})
+    otps_collection.delete_many({})
+    print("Cleanup complete.")
+
+def seed_clients(handlers):
+    print("Seeding clients...")
     clients = []
-    for i in range(1, 41):
-        ref_no = f"REF-{1000 + i}"
+    locations = ["California, USA", "London, UK", "Berlin, Germany", "Tokyo, Japan", "Singapore", "New York, USA"]
+    affiliations = ["University", "Research Center", "Corporate", "Freelance"]
+    
+    for i in range(1, 11):
+        client_id = f"CL-{i:03d}"
         clients.append({
-            "client_id": f"CL-{i:03d}",
-            "name": f"Client Organization {i}",
-            "location": f"City {i}",
-            "email": f"contact{i}@clientorg.com",
+            "client_id": client_id,
+            "name": f"Organization {i}",
+            "location": random.choice(locations),
+            "email": f"contact{i}@org{i}.com",
             "whatsapp_no": f"+12345678{i:02d}",
-            "client_ref_no": ref_no,
-            "client_link": f"https://client{i}.com",
-            "bank_account": f"ACC-{5000 + i}",
-            "affiliation": "Research Partner",
+            "client_ref_no": f"REF-{2000 + i}",
+            "client_link": f"https://org{i}.com",
+            "bank_account": f"BANK-{5000 + i}",
+            "affiliation": random.choice(affiliations),
             "total_orders": 0,
-            "client_handlers": admin_emails[i % len(admin_emails)], # Linked to an Admin
-            "created_at": datetime.utcnow()
+            "client_handler": random.choice(handlers),
+            "created_at": datetime.utcnow() - timedelta(days=30)
         })
-    result = clients_collection.insert_one(clients[0]) # Dummy to show structure if needed, but we use insert_many
-    clients_collection.delete_many({}) # Clean up
-    result = clients_collection.insert_many(clients)
+    clients_collection.insert_many(clients)
     print(f"Successfully seeded {len(clients)} clients.")
-    return clients # Return full docs for ref access
+    return clients
 
 def seed_manuscripts(clients):
     print("Seeding manuscripts...")
-    manuscripts_collection.delete_many({})
     ms_list = []
-    for i, client in enumerate(clients):
+    titles = [
+        "Impact of AI on Healthcare", "Renewable Energy Trends", "Genetic Mapping in Agriculture", 
+        "Global Economic Shifts", "Marine Biodiversity Loss", "Blockchain in Logistics"
+    ]
+    
+    for client in clients:
         # 2 Manuscripts per client
         for j in range(1, 3):
+            ms_id = f"MS-{client['client_id']}-{j}"
             ms_list.append({
-                "manuscript_id": f"MS-{client['client_id']}-{j}",
-                "title": f"Scientific Paper {i+1}.{j}",
-                "order_type": "Original",
-                "client_id": client["client_id"], # Proper Relation
-                "client_ref_no": client["client_ref_no"], # Matching Ref
-                "created_at": datetime.utcnow()
+                "manuscript_id": ms_id,
+                "title": f"{random.choice(titles)} Part {j}",
+                "order_type": random.choice(["Original", "Modification", "Proofreading"]),
+                "client_id": client["client_id"],
+                "client_ref_no": client["client_ref_no"],
+                "created_at": datetime.utcnow() - timedelta(days=25)
             })
-    result = manuscripts_collection.insert_many(ms_list)
+    manuscripts_collection.insert_many(ms_list)
     print(f"Successfully seeded {len(ms_list)} manuscripts.")
     return ms_list
 
 def seed_orders(clients, manuscripts):
     print("Seeding orders...")
-    orders_collection.delete_many({})
     orders = []
-    for i, client in enumerate(clients):
-        # Link to the first manuscript of this client
-        ms = next(m for m in manuscripts if m["client_id"] == client["client_id"])
+    for i, ms in enumerate(manuscripts):
+        client = next(c for c in clients if c["client_id"] == ms["client_id"])
+        
+        order_id = f"ORD-{ms['manuscript_id']}"
+        total = float(random.randint(1000, 5000))
         
         orders.append({
-            "order_id": f"ORD-{client['client_id']}",
-            "client_ref_no": client["client_ref_no"], # Matching Ref
+            "order_id": order_id,
+            "client_ref_no": client["client_ref_no"],
             "s_no": i + 1,
-            "order_date": datetime.utcnow(),
-            "client_id": client["client_id"], # Proper Relation
-            "manuscript_id": ms["manuscript_id"], # Proper Relation
+            "order_date": datetime.utcnow() - timedelta(days=20),
+            "client_id": client["client_id"],
+            "manuscript_id": ms["manuscript_id"],
             "order_type": ms["order_type"],
-            "index": "Q1",
-            "rank": "A",
+            "index": random.choice(["Q1", "Q2", "Q3"]),
+            "rank": random.choice(["A", "B"]),
             "currency": "USD",
-            "total_amount": 1000.0,
-            "writing_amount": 600.0,
-            "modification_amount": 200.0,
-            "po_amount": 200.0,
-            "payment_status": "Partial" if i % 2 == 0 else "Pending",
-            "assigned_to": client["client_handlers"], # Linked to the same handler
-            "remarks": "Urgent" if i % 10 == 0 else "Regular",
-            "created_at": datetime.utcnow(),
+            "total_amount": total,
+            "writing_amount": total * 0.6,
+            "modification_amount": total * 0.2,
+            "po_amount": total * 0.2,
+            "payment_status": random.choice(["Pending", "Partial", "Paid"]),
+            "assigned_to": client["client_handler"],
+            "remarks": "Priority Seeding Data",
+            "created_at": datetime.utcnow() - timedelta(days=20),
             "updated_at": datetime.utcnow()
         })
     orders_collection.insert_many(orders)
+    
+    # Update client total_orders count
+    for client in clients:
+        count = orders_collection.count_documents({"client_id": client["client_id"]})
+        clients_collection.update_one({"client_id": client["client_id"]}, {"$set": {"total_orders": count}})
+        
     print(f"Successfully seeded {len(orders)} orders.")
     return orders
 
-def seed_payments(clients, orders):
+def seed_payments(orders):
     print("Seeding payments...")
-    payments_collection.delete_many({})
     payments = []
-    for i, client in enumerate(clients[:20]): # Payments for first 20 clients
-        order = next(o for o in orders if o["client_id"] == client["client_id"])
+    for order in orders:
+        if order["payment_status"] == "Pending":
+            continue
+            
+        # Add at least phase 1 for Partial/Paid
+        pay_date = order["order_date"] + timedelta(days=5)
+        phase_1_amt = order["total_amount"] * 0.4
         
         payments.append({
-            "client_ref_number": client["client_ref_no"], # Matching Ref
-            "client_id": client["client_id"], # Proper Relation
+            "client_ref_number": order["client_ref_no"],
+            "client_id": order["client_id"],
+            "order_id": order["order_id"],
             "phase": 1,
-            "amount": order["total_amount"] / 2, # Logical amount
-            "payment_received_account": "HDFC-001",
-            "payment_date": datetime.utcnow(),
-            "phase_1_payment": order["total_amount"] / 2,
-            "phase_1_payment_date": datetime.utcnow(),
+            "amount": phase_1_amt,
+            "payment_received_account": "HDFC-PRIMARY",
+            "payment_date": pay_date,
+            "phase_1_payment": phase_1_amt,
+            "phase_1_payment_date": pay_date,
             "status": "Verified",
-            "created_at": datetime.utcnow()
+            "created_at": pay_date
         })
-    payments_collection.insert_many(payments)
-    print(f"Successfully seeded {len(payments)} payments.")
+        
+        # If Paid, add other phases
+        if order["payment_status"] == "Paid":
+            for phase in [2, 3]:
+                amt = order["total_amount"] * 0.3
+                p_date = pay_date + timedelta(days=phase * 5)
+                payments.append({
+                    "client_ref_number": order["client_ref_no"],
+                    "client_id": order["client_id"],
+                    "order_id": order["order_id"],
+                    "phase": phase,
+                    "amount": amt,
+                    "payment_received_account": "HDFC-PRIMARY",
+                    "payment_date": p_date,
+                    f"phase_{phase}_payment": amt,
+                    f"phase_{phase}_payment_date": p_date,
+                    "status": "Verified",
+                    "created_at": p_date
+                })
+                
+    if payments:
+        payments_collection.insert_many(payments)
+    print(f"Successfully seeded {len(payments)} payment phases.")
 
 if __name__ == "__main__":
     try:
-        admin_emails = seed_users()
-        clients = seed_clients(admin_emails)
+        handlers = get_existing_handlers()
+        print(f"Found active handlers: {handlers}")
+        
+        clear_operational_data()
+        
+        clients = seed_clients(handlers)
         manuscripts = seed_manuscripts(clients)
         orders = seed_orders(clients, manuscripts)
-        seed_payments(clients, orders)
-        print("\nAll mock data seeded with STRICT RELATIONS successfully!")
+        seed_payments(orders)
+        
+        print("\n" + "="*40)
+        print("RELATIONAL MOCK DATA SEEDED SUCCESSFULLY")
+        print("="*40)
+        print("Note: Users and Tokens collections were preserved.")
+        
     except Exception as e:
         print(f"Error seeding data: {e}")
         import traceback

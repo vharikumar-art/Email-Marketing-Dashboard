@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, Generic, TypeVar, Any
 from enum import Enum
 from datetime import datetime
 
@@ -7,6 +7,14 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     MANAGER = "manager"
     EMPLOYEE = "employee"
+
+T = TypeVar("T")
+
+class ApiResponse(BaseModel, Generic[T]):
+    status_code: int
+    status: str
+    message: str
+    data: Optional[T] = None
 
 class PasswordUpdate(BaseModel):
     new_password: str
@@ -19,15 +27,24 @@ class UserBase(BaseModel):
     email: EmailStr
     full_name: Optional[str] = None
     role: UserRole = UserRole.EMPLOYEE
+    phone_number: Optional[str] = None
+    permissions: Optional[dict[str, list[str]]] = Field(default_factory=lambda: {"dashboard": []})
 
 class UserCreate(UserBase):
     password: str
+
+class PermissionUpdate(BaseModel):
+    email: EmailStr
+    permissions: dict[str, list[str]]
 
 class UserResponse(UserBase):
     id: str = Field(..., alias="_id")
 
     class Config:
         populate_by_name = True
+
+class UserDetailResponse(UserResponse):
+    handled_clients: list[ClientResponse] = []
 
 class Token(BaseModel):
     access_token: str
@@ -63,7 +80,7 @@ class ClientBase(BaseModel):
     bank_account: Optional[str] = None
     affiliation: Optional[str] = None
     total_orders: int = 0
-    client_handlers: Optional[str] = None # Ref to User email or ID
+    client_handler: Optional[str] = None # Ref to User full name
 
 class ClientCreate(ClientBase):
     pass
@@ -151,21 +168,21 @@ class PaymentResponse(PaymentBase):
 
 class DashboardOrderResponse(BaseModel):
     s_no: Optional[int] = None
-    order_date: datetime
+    order_date: Optional[datetime] = None
     client_id: str
     client_location: Optional[str] = None
     client_Email: Optional[str] = None
     client_whatsapp_number: Optional[str] = None
     ref_no: Optional[str] = None
-    manuscript_id: str
+    manuscript_id: Optional[str] = None
     order_type: Optional[str] = None
     index: Optional[str] = None
     rank: Optional[str] = None
-    currency: str
-    total_amount: float
-    writing_amount: float
-    modification_amount: float
-    po_amount: float
+    currency: Optional[str] = "USD"
+    total_amount: float = 0.0
+    writing_amount: float = 0.0
+    modification_amount: float = 0.0
+    po_amount: float = 0.0
     writing_start_date: Optional[datetime] = None
     writing_end_date: Optional[datetime] = None
     modification_start_date: Optional[datetime] = None
@@ -179,8 +196,45 @@ class DashboardOrderResponse(BaseModel):
     phase_2_payment_date: Optional[datetime] = None
     phase_3_payment: float = 0.0
     phase_3_payment_date: Optional[datetime] = None
-    payment_status: str
+    payment_status: Optional[str] = "Pending"
     client_link: Optional[str] = None
     bank_account: Optional[str] = None
     client_affiliations: Optional[str] = None
     remarks: Optional[str] = None
+
+class DashboardUpdate(BaseModel):
+    # CLIENT FIELDS
+    client_location: Optional[str] = None
+    client_Email: Optional[EmailStr] = None
+    client_whatsapp_number: Optional[str] = None
+    client_link: Optional[str] = None
+    bank_account: Optional[str] = None
+    client_affiliations: Optional[str] = None
+    
+    # ORDER FIELDS
+    order_date: Optional[datetime] = None
+    ref_no: Optional[str] = None
+    order_type: Optional[str] = None
+    index: Optional[str] = None
+    rank: Optional[str] = None
+    currency: Optional[str] = None
+    total_amount: Optional[float] = None
+    writing_amount: Optional[float] = None
+    modification_amount: Optional[float] = None
+    po_amount: Optional[float] = None
+    writing_start_date: Optional[datetime] = None
+    writing_end_date: Optional[datetime] = None
+    modification_start_date: Optional[datetime] = None
+    modification_end_date: Optional[datetime] = None
+    po_start_date: Optional[datetime] = None
+    po_end_date: Optional[datetime] = None
+    payment_status: Optional[str] = None
+    remarks: Optional[str] = None
+
+    # PAYMENT FIELDS (Updates the first payment record for simplicity or we can expand)
+    phase_1_payment: Optional[float] = None
+    phase_1_payment_date: Optional[datetime] = None
+    phase_2_payment: Optional[float] = None
+    phase_2_payment_date: Optional[datetime] = None
+    phase_3_payment: Optional[float] = None
+    phase_3_payment_date: Optional[datetime] = None
