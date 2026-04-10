@@ -116,23 +116,23 @@ def format_mongo_id(doc):
         doc["_id"] = str(doc["_id"])
     return doc
 
-# # CORS Middleware
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-   "https://unflushed-uninterpretively-corey.ngrok-free.dev" ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         "http://localhost:5173",
+#    "https://unflushed-uninterpretively-corey.ngrok-free.dev" ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 @app.get("/", response_model=ApiResponse[dict])
 def read_root():
