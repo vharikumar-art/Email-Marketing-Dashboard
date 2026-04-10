@@ -17,5 +17,5 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
-# CORS Origins
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173", "").split(",")
+# CORS Origins - Default to ["*"] for allow-all
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")

@@ -121,7 +121,7 @@ def format_mongo_id(doc):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False, # Must be False if using "*" in origins
     allow_methods=["*"],
     allow_headers=["*"],
 )
