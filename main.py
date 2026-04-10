@@ -59,14 +59,14 @@ from bson import ObjectId
 app = FastAPI(title="Email Dashboard API")
 
 
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or your frontend URL
+    allow_origins=["https://marketing-dashboard-one-zeta.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # --- CUSTOM EXCEPTION HANDLERS ---
 
 @app.exception_handler(HTTPException)
