@@ -124,6 +124,7 @@ app.add_middleware(
     allow_credentials=True, 
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origins_regex=r"https://.*\.vercel\.app",
 )
 # app.add_middleware(
 #     CORSMiddleware,
