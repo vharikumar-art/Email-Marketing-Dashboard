@@ -120,7 +120,7 @@ def format_mongo_id(doc):
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["https://marketing-dashboard-one-zeta.vercel.app"],
     allow_credentials=True, 
     allow_methods=["*"],
     allow_headers=["*"],
