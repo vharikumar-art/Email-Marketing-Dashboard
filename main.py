@@ -58,6 +58,15 @@ from bson import ObjectId
 
 app = FastAPI(title="Email Dashboard API")
 
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- CUSTOM EXCEPTION HANDLERS ---
 
 @app.exception_handler(HTTPException)
