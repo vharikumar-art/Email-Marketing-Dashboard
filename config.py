@@ -17,10 +17,7 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
-# CORS Origins - Default to ["*"] for allow-all
-# We split by comma if the variable exists, otherwise we allow all
-raw_origins = os.getenv("ALLOWED_ORIGINS")
-if raw_origins:
-    ALLOWED_ORIGINS = raw_origins.split(",")
-else:
-    ALLOWED_ORIGINS = ["*"]
+# CORS Origins - Production Ready
+# Comma-separated list. Strips trailing slashes to avoid common CORS errors.
+raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,https://marketing-dashboard-one-zeta.vercel.app")
+ALLOWED_ORIGINS = [origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip()]
