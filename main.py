@@ -59,33 +59,14 @@ from bson import ObjectId
 app = FastAPI(title="Email Dashboard API")
 
 
-# --- MANUAL CORS MIDDLEWARE ---
-# This replaces standard CORSMiddleware to resolve the "400 Bad Request" on OPTIONS preflight
-@app.middleware("http")
-async def manual_cors_middleware(request: Request, call_next):
-    # Log incoming request for debugging
-    origin = request.headers.get("origin")
-    print(f"DEBUG: {request.method} {request.url.path} from Origin: {origin}")
-
-    if request.method == "OPTIONS":
-        # Handle preflight requests
-        response = JSONResponse(content="OK", status_code=200)
-        if origin:
-            # Dynamically allow the origin if it matches our list or for debugging
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Max-Age"] = "600"
-        return response
-
-    # Handle actual requests
-    response = await call_next(request)
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        # Optional: set other headers if needed for actual response
-    return response
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # --- CUSTOM EXCEPTION HANDLERS ---
 
 @app.exception_handler(HTTPException)
