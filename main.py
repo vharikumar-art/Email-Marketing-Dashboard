@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 from schemas import (
     UserCreate, 
@@ -34,8 +33,7 @@ from config import (
     SMTP_PORT, 
     SMTP_USERNAME, 
     SMTP_PASSWORD, 
-    EMAIL_FROM,
-    ALLOWED_ORIGINS
+    EMAIL_FROM
 )
 from auth import (
     get_password_hash,
@@ -58,15 +56,6 @@ from bson import ObjectId
 
 app = FastAPI(title="Email Dashboard API")
 
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 # --- CUSTOM EXCEPTION HANDLERS ---
 
 @app.exception_handler(HTTPException)
