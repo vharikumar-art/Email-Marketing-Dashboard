@@ -52,7 +52,8 @@ from app.config import (
     SMTP_USERNAME, 
     SMTP_PASSWORD, 
     EMAIL_FROM,
-    ALLOWED_ORIGINS
+    ALLOWED_ORIGINS,
+    OTP_ENABLED
 )
 from app.auth import (
     encrypt_password,
@@ -72,7 +73,8 @@ from app.database import (
     orders_collection,
     payments_collection, 
     payment_history_collection,
-    otps_collection
+    otps_collection,
+    settings_collection
 )
 
 from app.currency_converter import convert_inr_to_usd, convert_usd_to_inr, get_current_rate_info
@@ -102,9 +104,9 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
         
         # Log slow requests (>1 second)
         if process_time > 1.0:
-            print(f"🐌 SLOW REQUEST: {request.method} {request.url.path} took {process_time:.2f}s")
+            print(f"[SLOW] SLOW REQUEST: {request.method} {request.url.path} took {process_time:.2f}s")
         elif process_time > 0.5:
-            print(f"⚠️  MEDIUM REQUEST: {request.method} {request.url.path} took {process_time:.2f}s")
+            print(f"[WARNING] MEDIUM REQUEST: {request.method} {request.url.path} took {process_time:.2f}s")
         
         return response
 
@@ -138,8 +140,16 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 # --- HELPER ---
-# --- HELPER ---
-# --- HELPER ---
+def is_otp_enabled() -> bool:
+    """
+    Check if OTP authentication is enabled.
+    Checks database settings first, then falls back to SMTP / config settings.
+    """
+    setting = settings_collection.find_one({"key": "otp_enabled"})
+    if setting is not None:
+        return bool(setting.get("value", True))
+    return OTP_ENABLED
+
 async def send_otp_email(to_email: str, otp: str):
     """
     Sends an OTP email via SMTP asynchronously.
@@ -151,8 +161,8 @@ async def send_otp_email(to_email: str, otp: str):
     msg["To"] = to_email
 
     # DEBUG: Print OTP for testing purposes
-    print(f"\n🔐 [TEST OTP] For email {to_email}: {otp}")
-    print("⚠️  This OTP is printed for testing only!\n")
+    print(f"\n[SECURE] [TEST OTP] For email {to_email}: {otp}")
+    print("[WARNING] This OTP is printed for testing only!\n")
 
     print(f"\n[OTP DEBUG] Attempting to send email to {to_email} via {SMTP_SERVER}:{SMTP_PORT}\n")
     try:
@@ -459,7 +469,7 @@ async def login(request: LoginRequest):
         )
     
     # Check if role requires OTP (Admin and Manager)
-    if user["role"] in [UserRole.ADMIN, UserRole.MANAGER]:
+    if is_otp_enabled() and user["role"] in [UserRole.ADMIN, UserRole.MANAGER]:
         otp = str(random.randint(100000, 999999))
         
         # Store OTP
@@ -553,6 +563,36 @@ async def logout(token: str = Depends(oauth2_scheme), current_user: dict = Depen
         "status": "success",
         "message": "Logged out successfully",
         "data": None
+    }
+
+@app.get("/otp-status", response_model=ApiResponse[dict])
+def get_otp_status():
+    """
+    Get the current status of OTP verification (enabled/disabled).
+    """
+    enabled = is_otp_enabled()
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": f"OTP verification is {'enabled' if enabled else 'disabled'}",
+        "data": {"otp_enabled": enabled}
+    }
+
+@app.post("/toggle-otp", response_model=ApiResponse[dict])
+def toggle_otp(enabled: bool):
+    """
+    Enable or disable OTP verification globally.
+    """
+    settings_collection.update_one(
+        {"key": "otp_enabled"},
+        {"$set": {"value": enabled}},
+        upsert=True
+    )
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": f"OTP verification has been {'enabled' if enabled else 'disabled'}",
+        "data": {"otp_enabled": enabled}
     }
 
 # --- USER & ADMIN CREATION ---

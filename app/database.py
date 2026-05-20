@@ -12,6 +12,7 @@ manuscripts_collection = db["manuscripts"]
 payments_collection = db["payments"]
 payment_history_collection = db["payment_history"]
 otps_collection = db["otps"]
+settings_collection = db["settings"]
 
 # --- INDEXES FOR PERFORMANCE ---
 users_collection.create_index("email", unique=True)

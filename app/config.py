@@ -10,6 +10,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 600))
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+OTP_ENABLED = os.getenv("OTP_ENABLED", "True").lower() in ("true", "1", "yes")
 
 # SMTP
 SMTP_SERVER = os.getenv("SMTP_SERVER")
