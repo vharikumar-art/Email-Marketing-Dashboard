@@ -7,11 +7,12 @@
 4. [Directory Structure](#directory-structure)
 5. [Database Design](#database-design)
 6. [Authentication & Authorization Flow](#authentication--authorization-flow)
-7. [API Endpoints](#api-endpoints)
-8. [Key Features](#key-features)
-9. [Security Implementation](#security-implementation)
-10. [Deployment & Configuration](#deployment--configuration)
-11. [Workflow Examples](#workflow-examples)
+7. [ID Range Management](#id-range-management)
+8. [API Endpoints](#api-endpoints)
+9. [Key Features](#key-features)
+10. [Security Implementation](#security-implementation)
+11. [Deployment & Configuration](#deployment--configuration)
+12. [Workflow Examples](#workflow-examples)
 
 ---
 
@@ -19,7 +20,7 @@
 
 ### What is this project?
 
-The **Email Dashboard API** is a comprehensive backend system designed to manage email communications, client relationships, manuscripts, orders, and payments. It's built with a **multi-tier Role-Based Access Control (RBAC)** system that allows different user roles to have varying levels of access and permissions.
+The **Email Dashboard API** is a comprehensive backend system designed to manage email communications, client relationships, manuscripts, orders, and payments. It features a **Role-Based Access Control (RBAC)** system that permits different user roles (Admin, Manager, Employee) to perform operations within their bounds.
 
 ### Purpose
 
@@ -27,16 +28,16 @@ The system serves as a centralized platform for:
 - Managing client information and communications
 - Tracking manuscript submissions (optional, ~30% of clients)
 - Processing and managing orders for academic/editorial services
-- Handling multi-phase payment tracking
-- Providing column-level permissions for dashboard field access
-- Implementing secure 2FA/OTP authentication for privileged users
+- Handling multi-phase payment tracking and transaction history
+- Currency conversion between INR and USD using live exchange rates
+- Auto-generating client and order IDs within non-overlapping ranges assigned to employees
+- Providing secure 2FA/OTP login for privileged users (Admin and Manager)
 
 ### Target Users
 
-- **Super Admins**: System administrators with full organizational control
-- **Admins**: Senior management with broad access and user management capabilities
-- **Managers**: Team leaders who can manage employees and access dashboard data
-- **Employees**: Front-line staff with restricted access to assigned clients only
+- **Super Admins / Admins**: Organization administrators with full control over user creation, manager creation, global settings, and viewing/updating all system data.
+- **Managers**: Team leaders who can manage employees, create new employees/managers, view all clients, and oversee dashboard data.
+- **Employees**: Front-line team members who manage assigned clients, create/update orders, and process payments. Employees are restricted to viewing and managing only their assigned clients.
 
 ---
 
@@ -44,27 +45,23 @@ The system serves as a centralized platform for:
 
 ### Backend Framework
 - **FastAPI**: Modern, fast ASGI web framework for building REST APIs
-- **Python** (3.11+): Core programming language
-- **Uvicorn**: ASGI server for running FastAPI applications
+- **Python (3.11+)**: Core programming language
+- **Uvicorn**: ASGI server for running the FastAPI application
 
-### Database
+### Database & Caching
 - **MongoDB**: NoSQL database for flexible, document-based data storage
 - **PyMongo**: Python MongoDB driver for database connectivity
+- **Redis & cachetools**: Caching infrastructure supporting both Redis (production) and local memory (fallback) via `CacheManager`
 
 ### Authentication & Security
-- **Python-Jose**: JWT token creation and verification
-- **Cryptography (Fernet)**: Two-way symmetric encryption for passwords and sensitive data
-- **Bcrypt**: Legacy support for password hashing (transitioning to Fernet)
+- **Python-Jose**: JWT token creation, signature verification, and session decoding
+- **Cryptography (Fernet)**: Two-way symmetric encryption. Unlike traditional hashing (e.g. Bcrypt), password credentials are encrypted and decrypted bidirectionally using a secure 256-bit `ENCRYPTION_KEY` to allow Admins and Managers to view decrypted employee passwords on display endpoints.
 
-### Utilities
-- **Pydantic**: Data validation and serialization
+### Utilities & Integrations
+- **Pydantic**: Data validation and serialization using Pydantic V2 schemas
 - **python-dotenv**: Environment variable management
-- **python-docx**: (Newly added) For documentation generation
-
-### Server Configuration
-- **Uvicorn**: ASGI HTTP server
-- **CORSMiddleware**: Cross-Origin Resource Sharing support
-- **GZipMiddleware**: HTTP compression for optimized response sizes
+- **requests**: External HTTP client used to fetch live exchange rates from the exchange rate API
+- **aiosmtplib**: Asynchronous SMTP client used to send OTP emails securely over TLS/STARTTLS
 
 ---
 
@@ -75,28 +72,30 @@ The system serves as a centralized platform for:
 ```
 ┌─────────────────────┐
 │   Frontend (React)  │ (Deployed on Vercel)
-├─────────────────────┤
-         │ HTTPS/CORS
-         │
-         ▼
+└──────────┬──────────┘
+           │ HTTPS/CORS
+           ▼
 ┌─────────────────────┐
 │   FastAPI Server    │ (Main API Layer)
 ├─────────────────────┤
+│ - Performance MW    │
 │ - Authentication    │
 │ - Authorization     │
+│ - Cache Manager     │
 │ - Business Logic    │
-│ - Error Handling    │
 └──────────┬──────────┘
-           │ TCP Connection
-           ▼
-┌─────────────────────┐
-│     MongoDB         │ (Data Layer)
-├─────────────────────┤
-│ - users             │
-│ - clients           │
-│ - orders            │
+           ├──────────────────────────┐
+           │ TCP Connection           │ Cache Lookups
+           ▼                          ▼
+┌─────────────────────┐    ┌─────────────────────┐
+│     MongoDB         │    │     Redis / Memory  │
+├─────────────────────┤    ├─────────────────────┤
+│ - users             │    │ - Dashboard cache   │
+│ - clients           │    │ - User cache        │
+│ - orders            │    └─────────────────────┘
 │ - payments          │
 │ - manuscripts       │
+│ - payment_history   │
 │ - tokens            │
 │ - otps              │
 └─────────────────────┘
@@ -105,36 +104,22 @@ The system serves as a centralized platform for:
 ### Architectural Layers
 
 #### 1. **Presentation Layer (Frontend)**
-- React-based dashboard
-- Communicates via REST API
-- Handles UI/UX and user interactions
-- Deployed on Vercel
+- React-based dashboard, communicating with the FastAPI backend via REST APIs. Handles UI views, forms, and client-side routing.
 
 #### 2. **API Layer (FastAPI)**
-- Receives HTTP requests from frontend
-- Validates input using Pydantic schemas
-- Enforces RBAC policies
-- Executes business logic
-- Returns structured JSON responses
+- Handles HTTP requests, parses schemas, triggers validation, executes business logic, and formats responses consistently.
+- Integrates a `PerformanceMiddleware` to log slow requests (>1.0 second) and medium requests (>0.5 second).
 
 #### 3. **Authentication Layer (JWT + OTP)**
-- OAuth2 password bearer token scheme
-- JWT-based session management
-- OTP validation for 2FA (Admin/Manager only)
-- Email-based OTP delivery via SMTP
+- Issues JWT bearer tokens for session management.
+- Privileged users (Admin/Manager) must complete a two-step authentication process requiring email OTP verification.
+- Tokens are automatically blacklisted/invalidated in the database upon logout.
 
 #### 4. **Business Logic Layer**
-- User management (creation, password updates)
-- Client management (CRUD operations)
-- Order processing and tracking
-- Payment phase management
-- Permission assignment and validation
+- Implements currency conversion, unified client-order-payment creation, database synchronization (rippling client modifications), and non-overlapping ID range checks.
 
 #### 5. **Persistence Layer (MongoDB)**
-- NoSQL document storage
-- Collections for each entity
-- Denormalized data for performance
-- Reference-based relationships
+- Stores structured documents in MongoDB. Uses single-field, compound, and TTL indexes for search and performance optimization.
 
 ---
 
@@ -144,51 +129,46 @@ The system serves as a centralized platform for:
 Email Dashboard/
 │
 ├── app/                             # Core Application Code
-│   ├── main.py                      # Application entry point & endpoints
-│   ├── auth.py                      # JWT & Encryption logic (Fernet)
-│   ├── schemas.py                   # Pydantic data models
-│   ├── database.py                  # MongoDB connection
-│   └── config.py                    # App configuration
+│   ├── main.py                      # Application entry point & API endpoints
+│   ├── auth.py                      # JWT verification & Fernet encryption logic
+│   ├── schemas.py                   # Pydantic data models & validators
+│   ├── database.py                  # MongoDB connection & index initialization
+│   ├── config.py                    # Environment configuration
+│   ├── cache.py                     # Caching layer (Redis / TTLCache)
+│   └── currency_converter.py        # INR ↔ USD live exchange rate converter
 │
 ├── docs/                            # Project Documentation
 │   ├── PROJECT_ARCHITECTURE.md      # This file
 │   ├── DATABASE_DOCUMENTATION.md    # Database schemas
 │   ├── API_DOCUMENTATION.md         # API reference
-│   └── ...                          # Other guides
-│
-├── scripts/                         # Utility Scripts
-│   ├── reset_passwords.py           # Database seeding script
-│   ├── generate_docs.py             # Documentation generator
 │   └── ...
 │
-├── tests/                           # Testing Suite
+├── scripts/                         # Utility & Administrative Scripts
+│   ├── seed_data.py                 # Initial DB seed data
+│   ├── mock_data_generator.py       # Detailed mock data generator
+│   ├── clear_db.py                  # Database reset script
+│   ├── check_admins.py              # Administrative check for existing admins
+│   ├── consolidate_payment_history.py # Syncs historical payments to history
+│   └── migration_add_new_fields.py  # Migrates database schema to support new fields
 │
-├── .env                             # Environment variables
-├── requirements.txt                 # Dependencies
+├── static/                          # Static Assets
+│   ├── default_user.png             # Fallback user profile photo
+│   └── default_client.png           # Fallback client photo
+│
+├── .env                             # Environment variables configuration
+├── requirements.txt                 # Project dependencies
+├── pyproject.toml                   # Project metadata & requirements
 ├── vercel.json                      # Vercel deployment config
 └── render.yaml                      # Render deployment config
 ```
-
-### File Purposes
-
-| File | Purpose | Type |
-|------|---------|------|
-| `main.py` | Core API endpoints & app initialization | Source Code |
-| `auth.py` | Password & JWT logic | Source Code |
-| `schemas.py` | Request/response validation | Source Code |
-| `database.py` | MongoDB connectivity | Source Code |
-| `config.py` | Configuration & secrets | Source Code |
-| `mock_data_generator.py` | Test data creation | Utility |
-| `clear_db.py` | Database reset | Utility |
-| `check_admins.py` | Admin verification | Utility |
-| `README.md` | Installation guide | Documentation |
-| `PROJECT_ARCHITECTURE.md` | This file | Documentation |
 
 ---
 
 ## Database Design
 
-### Collections Relationship Diagram
+### Collections Overview
+
+The database contains **8 collections** optimized with indexes for query speeds and aggregation.
 
 ```
 ┌──────────┐
@@ -206,1089 +186,486 @@ Email Dashboard/
      ├─── submits ──→ manuscripts (1-to-Many, Optional)
      └─── places ───→ orders (1-to-Many)
                           │
-                          └──→ payments (1-to-Many)
+                          ├─→ payments (1-to-1 Phase Document)
+                          └─→ payment_history (1-to-Many logs)
 ```
 
-### Collection Schemas
+### Collection Schemas & Fields
 
 #### 1. **users**
+Stores account data. Passwords are encrypted using two-way Fernet encryption, allowing administrative retrieval.
 ```javascript
 {
-  _id: ObjectId,
-  email: "admin@company.com",              // Unique identifier
-  full_name: "John Doe",
-  password: "encrypted_string...",          // Two-way encrypted (Fernet)
-  role: "admin",                           // admin | manager | employee
-  phone_number: "+1234567890",             // Optional
-  permissions: {
-    dashboard: ["column1", "column2"]      // Column-level permissions
+  "_id": ObjectId("..."),
+  "email": "employee@company.com",          // Unique login identifier
+  "full_name": "Jane Doe",
+  "password": "gAAAAABm...",                // Fernet encrypted string
+  "role": "employee",                       // admin | manager | employee
+  "phone_number": "+1234567890",             // Work phone number
+  "personal_email": "jane.personal@gmail.com", // Personal contact email
+  "personal_number": "+1987654321",          // Personal phone number
+  "branch": "East Coast",
+  "profile_names": ["Profile_A", "Profile_B"], // Multiple profiles managed by employee
+  "permissions": {
+    "dashboard": []                         // Column permissions (Legacy)
   },
-  created_at: "2024-01-15T10:30:00Z"
+  "id_range_start": 100,                    // Auto-generated ID range start
+  "id_range_end": 200,                      // Auto-generated ID range end
+  "has_photo": true,
+  "photo_data": Binary("..."),              // Avatar image (max 500KB)
+  "photo_mime": "image/png"
 }
 ```
-
-**Indexes**: email (unique), role
+**Indexes**: `email` (unique), `full_name`, `role`
 
 #### 2. **clients**
+Stores client credentials, affiliations, and handler associations.
 ```javascript
 {
-  _id: ObjectId,
-  client_id: "CL-001",                     // Custom primary key
-  name: "Global Research Ltd",
-  country: "USA",
-  email: "contact@research.com",           // Optional
-  whatsapp_no: "+1987654321",              // Optional
-  client_ref_no: "REF-2024-001",           // From client (optional)
-  client_link: "https://www.example.com",  // Optional
-  bank_account: "ACCOUNT-123",             // Optional
-  affiliation: "Research Institute",       // Optional
-  total_orders: 5,                         // Denormalized count
-  client_handler: "John Doe",              // Ref to user full_name
-  created_at: "2024-01-16T14:20:00Z"
+  "_id": ObjectId("..."),
+  "client_id": "CL-2026-0100",             // Generated within handler range
+  "name": "Global Research Ltd",
+  "country": "USA",
+  "email": "contact@research.com",
+  "whatsapp_no": "+1987654321",
+  "client_ref_no": "REF-2026-001",
+  "client_link": "https://www.example.com",
+  "bank_account": "ACC-9988-XX",
+  "affiliation": "MIT Research",
+  "total_orders": 5,                       // Denormalized order count
+  "client_handler": "employee@company.com", // Employee email reference
+  "client_drive_link": "https://drive...",  // Google Drive link
+  "payment_drive_link": "https://drive...", // Proof of payment link
+  "created_at": ISODate("2026-05-20T11:00:00Z"),
+  "has_photo": false,
+  "photo_data": Binary("..."),
+  "photo_mime": "image/jpeg"
 }
 ```
-
-**Indexes**: client_id (unique), client_handler (for filtering by manager)
+**Indexes**: `client_id` (unique), `client_handler`
 
 #### 3. **orders**
+Represents assignments. It contains detailed pricing components, timeline markers, and tracking fields.
 ```javascript
 {
-  _id: ObjectId,
-  order_id: "ORD-2024-001",                // Auto-generated primary key
-  reference_id: "REF-USER-001",            // User-created, globally unique
-  client_ref_no: "CLIENT-REF",             // Optional, from client
-  s_no: 1,                                 // Serial number
-  order_date: "2024-01-17T09:00:00Z",
-  client_id: "CL-001",                     // FK → clients
-  manuscript_id: "MS-CL-001-1",            // FK → manuscripts (NULLABLE)
-  journal_name: "Nature",
-  title: "Advanced AI Systems",
-  order_type: "writing",                   // writing | modification | proofreading
-  index: "SCI",                            // SCI | Scopus | ESCI
-  rank: "Q1",                              // Q1 | Q2 | Q3 | Q4
-  currency: "USD",                         // USD | INR
-  total_amount: 5000.00,
-  writing_amount: 3000.00,
-  modification_amount: 1500.00,
-  po_amount: 500.00,
-  writing_start_date: "2024-01-17",
-  writing_end_date: "2024-02-17",
-  modification_start_date: "2024-02-18",
-  modification_end_date: "2024-02-25",
-  po_start_date: "2024-02-26",
-  po_end_date: "2024-02-28",
-  payment_status: "pending",               // pending | partial | paid
-  remarks: "Rush order",                   // Optional notes
-  created_at: "2024-01-17T09:00:00Z",
-  updated_at: "2024-01-20T15:30:00Z"
+  "_id": ObjectId("..."),
+  "order_id": "ORD-2026-005",              // Globally sequential order ID
+  "reference_id": "REF-2026-0100",          // Generated within handler range
+  "profile_name": "Profile_A",             // Profile used for assignment
+  "client_ref_no": "REF-2026-001",
+  "s_no": 5,
+  "order_date": ISODate("2026-05-20T11:00:00Z"),
+  "client_id": "CL-2026-0100",             // FK → clients
+  "manuscript_id": "MS-CL-2026-0100-REF-2026-0100", // FK → manuscripts (Optional)
+  "journal_name": "IEEE Access",
+  "title": "A Review of Neural Nets",
+  "order_type": "WO",                      // WO | PO | Thesis writing | etc.
+  "index": "SCI",                          // SCI | Scopus | ESCI | etc.
+  "rank": "Q1",                            // Q1 | Q2 | Q3 | Q4
+  "currency": "USD",                       // USD | INR
+  "total_amount": 1200.00,
+  "writing_amount": 800.00,
+  "modification_amount": 300.00,
+  "po_amount": 100.00,
+  "writing_start_date": ISODate("2026-05-21T00:00:00Z"),
+  "writing_end_date": ISODate("2026-06-21T00:00:00Z"),
+  "modification_start_date": null,
+  "modification_end_date": null,
+  "po_start_date": null,
+  "po_end_date": null,
+  "payment_status": "Pending",             // Pending | Partial Paid | Paid
+  "order_status": "Active",                // Active | Inactive
+  "payment_drive_link": "https://drive...",
+  "client_drive_link": "https://drive...",
+  "clients_details": "Important manuscript details",
+  "is_new_order": "yes",
+  "remarks": null,
+  "created_at": ISODate("2026-05-20T11:00:00Z"),
+  "updated_at": ISODate("2026-05-20T11:00:00Z")
 }
 ```
-
-**Indexes**: order_id (unique), reference_id (unique), client_id, manuscript_id
+**Indexes**: `order_id` (unique), `client_id`, `reference_id`, `s_no`, `order_date`, compound index on `(client_id, order_id)`
 
 #### 4. **payments**
+Aggregated billing information tracking payment phases on an order.
 ```javascript
 {
-  _id: ObjectId,
-  client_ref_number: "CLIENT-REF",        // Optional
-  reference_id: "REF-USER-001",           // Copied from order (for lookup)
-  client_id: "CL-001",                    // FK → clients
-  order_id: "ORD-2024-001",               // FK → orders
-  phase: 1,                               // 1 | 2 | 3 (payment phase)
-  amount: 1500.00,
-  payment_received_account: "Bank-A",
-  payment_date: "2024-02-01",
-  phase_1_payment: 1500.00,
-  phase_1_payment_date: "2024-02-01",
-  phase_2_payment: 1500.00,
-  phase_2_payment_date: "2024-02-15",
-  phase_3_payment: 2000.00,
-  phase_3_payment_date: "2024-02-28",
-  status: "paid",                         // pending | paid
-  created_at: "2024-02-01T10:00:00Z"
+  "_id": ObjectId("..."),
+  "client_id": "CL-2026-0100",
+  "order_id": "ORD-2026-005",
+  "reference_id": "REF-2026-0100",
+  "client_ref_number": "REF-2026-001",
+  "phase": 1,
+  "amount": 400.00,
+  "payment_received_account": "Bank-A",
+  "payment_date": ISODate("2026-05-20T11:00:00Z"),
+  "phase_1_payment": 400.00,
+  "phase_1_payment_date": ISODate("2026-05-20T11:00:00Z"),
+  "phase_1_payment_details": "First installment paid",
+  "phase_2_payment": 0.0,
+  "phase_2_payment_date": null,
+  "phase_2_payment_details": null,
+  "phase_3_payment": 0.0,
+  "phase_3_payment_date": null,
+  "phase_3_payment_details": null,
+  "status": "paid",
+  "paid_amount": 400.00,
+  "created_at": ISODate("2026-05-20T11:00:00Z")
 }
 ```
+**Indexes**: `client_id`, `order_id`, `phase`, compound index on `(order_id, phase)`
 
-**Indexes**: reference_id (for quick lookup), order_id, client_id, phase
-
-#### 5. **manuscripts**
+#### 5. **payment_history**
+Flat log of payment actions, allowing append-only audit tracking.
 ```javascript
 {
-  _id: ObjectId,
-  manuscript_id: "MS-CL-001-1",           // Composite key format
-  title: "Novel Algorithm Framework",
-  journal_name: "IEEE Transactions",       // Target journal
-  order_type: "writing",                  // writing | modification | proofreading
-  client_id: "CL-001",                    // FK → clients
-  created_at: "2024-01-18T11:00:00Z"
+  "_id": ObjectId("..."),
+  "client_name": "Global Research Ltd",
+  "client_id": "CL-2026-0100",
+  "order_id": "ORD-2026-005",
+  "reference_id": "REF-2026-0100",
+  "order_title": "A Review of Neural Nets",
+  "amount": 1200.00,
+  "paid_amount": 400.00,
+  "payment_date": ISODate("2026-05-20T11:00:00Z"),
+  "payment_received_account": "Bank-A",
+  "phase_1_payment": 400.00,
+  "phase_1_payment_date": ISODate("2026-05-20T11:00:00Z"),
+  "phase_1_payment_details": "First installment paid",
+  "phase_2_payment": 0.0,
+  "phase_2_payment_date": null,
+  "phase_2_payment_details": null,
+  "phase_3_payment": 0.0,
+  "phase_3_payment_date": null,
+  "phase_3_payment_details": null,
+  "created_at": ISODate("2026-05-20T11:00:00Z"),
+  "updated_at": ISODate("2026-05-20T11:00:00Z")
 }
 ```
+**Indexes**: `client_id`, `order_id`, `payment_date`
 
-**Indexes**: manuscript_id (unique), client_id
-
-#### 6. **tokens**
+#### 6. **manuscripts**
+Stores target journal details and service types for associated files.
 ```javascript
 {
-  _id: ObjectId,
-  user_email: "admin@company.com",        // FK → users
-  token: "eyJhbGciOiJIUzI1NiIsInR5cCI...", // JWT token
-  created_at: "2024-01-17T10:30:00Z"
+  "_id": ObjectId("..."),
+  "manuscript_id": "MS-CL-2026-0100-REF-2026-0100",
+  "title": "A Review of Neural Nets",
+  "journal_name": "IEEE Access",
+  "order_type": "WO",
+  "client_id": "CL-2026-0100",
+  "created_at": ISODate("2026-05-20T11:00:00Z")
 }
 ```
+**Indexes**: `manuscript_id` (unique), `client_id`
 
-**Indexes**: user_email, token
-
-#### 7. **otps**
+#### 7. **tokens**
+Session tracking database mapping JWTs to users.
 ```javascript
 {
-  _id: ObjectId,
-  email: "admin@company.com",             // FK → users
-  otp: "123456",                          // 6-digit code
-  created_at: "2024-01-17T10:30:00Z"      // For expiry calculation (15 minutes)
+  "_id": ObjectId("..."),
+  "user_email": "employee@company.com",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI...",
+  "created_at": ISODate("2026-05-20T11:00:00Z") // Expires automatically after 10 hours
 }
 ```
+**Indexes**: `token` (unique), `created_at` (TTL index expiring in 10 hours)
 
-**Indexes**: email (for quick lookup)
+#### 8. **otps**
+Stores login OTP records.
+```javascript
+{
+  "_id": ObjectId("..."),
+  "email": "admin@company.com",
+  "otp": "654321",
+  "created_at": ISODate("2026-05-20T11:55:00Z")
+}
+```
+**Indexes**: `email`
 
 ---
 
 ## Authentication & Authorization Flow
 
-### 1. Login Flow (Step-by-Step)
+### 1. Two-Step Login Flow (Admins & Managers)
 
 ```
-Client                          FastAPI Server              MongoDB
-  │                                 │                           │
-  ├─ POST /login ─────────────────→ │                           │
-  │  (email, password)              │                           │
-  │                                 ├── Find User ────────────→ │
-  │                                 │                           │
-  │                                 │ ← User Document ←─────── │
-  │                                 │                           │
-  │                                 ├─ Verify Password         │
-  │                                 │  (bcrypt compare)        │
-  │                                 │                           │
-  │                         [IF Admin/Manager]                  │
-  │                         Generate OTP (6 digits)             │
-  │                         │                                   │
-  │                         ├─ Store OTP ──────────────────────→│
-  │                         │  (otps collection)               │
-  │                         │                                   │
-  │                         ├─ Send Email ─────→ [SMTP Server]  │
-  │                         │  (with OTP code)                 │
-  │                         │                                   │
-  │ ← Login Response ────── │                                   │
-  │  {                      │                                   │
-  │   otp_required: true,   │                                   │
-  │   email: "..."          │                                   │
-  │  }                      │                                   │
-  │                         │                                   │
+Client (Admin/Manager)                 FastAPI Backend                SMTP Server / DB
+      │                                     │                                │
+      ├─ POST /login (email, password) ───→ │                                │
+      │                                     ├─ Decrypt & Verify Password     │
+      │                                     ├─ Generate 6-digit OTP          │
+      │                                     ├─ Store OTP in `otps` ─────────→│
+      │                                     ├─ Send OTP Email via SMTP ─────→│
+      │ ← Response: {otp_required: true} ───┤                                │
+      │                                     │                                │
+      │                                     │                                │
+      ├─ POST /verify-otp (email, otp) ───→ │                                │
+      │                                     ├─ Fetch & Validate OTP          │
+      │                                     ├─ Issue JWT Access Token        │
+      │                                     ├─ Store in `tokens` collection  │
+      │                                     ├─ Delete OTP from DB            │
+      │ ← Response: {access_token: "JWT"} ──┤                                │
 ```
 
-### 2. OTP Verification Flow
+- **Direct Login**: Employees skip OTP verification and receive a JWT access token immediately upon submitting correct email and password credentials.
+- **OTP Expiration**: OTPs are valid for exactly **5 minutes** from generation.
 
-```
-Client                          FastAPI Server              MongoDB
-  │                                 │                           │
-  ├─ POST /verify-otp ────────────→ │                           │
-  │  (email, otp)                   │                           │
-  │                                 ├─ Find OTP ───────────────→│
-  │                                 │  (in otps collection)    │
-  │                                 │                           │
-  │                                 │ ← OTP Document ←─────── │
-  │                                 │                           │
-  │                                 ├─ Check Expiry            │
-  │                                 │  (< 15 minutes)          │
-  │                                 │                           │
-  │                                 ├─ Verify OTP Match       │
-  │                                 │  (compare values)        │
-  │                                 │                           │
-  │                                 ├─ Generate JWT            │
-  │                                 ├─ Store Token ────────────→│
-  │                                 │  (tokens collection)     │
-  │                                 │                           │
-  │ ← Login Success ────── ────────│                           │
-  │  {                              │                           │
-  │   access_token: "JWT...",       │                           │
-  │   token_type: "bearer"          │                           │
-  │  }                              │                           │
-  │                                 │                           │
-```
+### 2. Session Invalidation (Logout)
+Calling `POST /logout` drops the active JWT record from the `tokens` collection, rendering it invalid for subsequent requests.
 
-### 3. Authenticated Request Flow
+### 3. Role Hierarchy & Restrictions
 
-```
-Client                          FastAPI Server              MongoDB
-  │                                 │                           │
-  ├─ GET /protected ──────────────→ │                           │
-  │  Headers: Authorization         │                           │
-  │  Bearer JWT_TOKEN               │                           │
-  │                                 ├─ Extract JWT             │
-  │                                 ├─ Verify Signature        │
-  │                                 ├─ Check Expiry            │
-  │                                 ├─ Decode Payload          │
-  │                                 │  (extract email)         │
-  │                                 │                           │
-  │                                 ├─ Find User ──────────────→│
-  │                                 │  (verify exists)         │
-  │                                 │                           │
-  │                                 │ ← User Document ←─────── │
-  │                                 │                           │
-  │                                 ├─ Check Role/Permissions  │
-  │                                 │                           │
-  │ ← Protected Data ────── ────────│                           │
-  │  (if authorized)                │                           │
-  │                                 │                           │
-```
+- **Admin**: Full access. Bootstrapped using `/init-super-admin` (permitted up to 5 Admins total). Can create other Admins and Managers.
+- **Manager**: Can create Managers and Employees. Can assign clients. Has global read access to dashboard columns.
+- **Employee**: Restricted to records where `client_handler` equals the employee's login email. Employee actions are confined to this dataset.
 
-### Authorization Rules
+*Note: Column-level editing permissions (previously stored in `users.permissions.dashboard`) are legacy. All authenticated users are authorized to update fields inside their scoped clients/orders.*
 
-#### By Role
+---
 
-| Action | Admin | Manager | Employee |
-|--------|-------|---------|----------|
-| Create User | ✅ | ✅ Employees only | ❌ |
-| Create Manager | ✅ | ❌ | ❌ |
-| Create Admin | ✅ Only (max 5) | ❌ | ❌ |
-| View All Clients | ✅ | ✅ | ❌ See own assigned |
-| Edit Dashboard | ✅ All fields | ✅ All fields | ✅ All fields (assigned clients) |
-| 2FA Required | ✅ Yes | ✅ Yes | ❌ No |
-| Update Own Password | ✅ | ✅ | ✅ |
-| Update Others' Password | ✅ | ✅ Employees only | ❌ |
+## ID Range Management
 
-#### Editable Dashboard
-- All users (Admin, Manager, Employee) can update any column on the dashboard.
-- Update operations are performed using the Order's database ID (**`order_db_id`**).
-- **Client Identification**: Updating a `client_id` for an order will automatically synchronize the change across all related collections (Orders, Payments, Manuscripts).
-- **Data Normalization**: Fields like `Country` and `Email` belong to the Client document. Updating them for one order updates them for all orders belonging to that client.
-- Employees are logically restricted to editing only their **assigned clients** and their related orders/payments.
+To prevent collision of custom identifiers across distributed entries, the application enforces non-overlapping **ID Ranges** for employees.
+
+- Admins/Managers configure numeric boundaries (e.g., employee A has start `100` to end `200`) when creating or updating employees.
+- When an employee initiates a Client or Order record creation without manual IDs, the system generates IDs matching the format:
+  - **Client ID**: `CL-{YYYY}-{Sequential Number}` (e.g. `CL-2026-0101`)
+  - **Reference ID**: `REF-{YYYY}-{Sequential Number}` (e.g. `REF-2026-0101`)
+- The system fetches the highest existing sequential identifier in the current year within the employee's range and increments it by 1.
+- Range overlap validations are executed during user configuration (`POST /users` and `PUT /users/permissions`), raising a `400 Bad Request` if bounds intersect with an existing employee range.
 
 ---
 
 ## API Endpoints
 
-### Authentication Endpoints
+### Authentication & Bootstrapping
 
-#### 1. Initialize Super Admin
-```
-POST /init-super-admin
-Purpose: Bootstrap first admin (one-time operation)
-Body: {
-  "email": "admin@company.com",
-  "full_name": "System Admin",
-  "password": "securepass123"
-}
-Response: 201 Created
-{
-  "status_code": 201,
-  "status": "success",
-  "message": "Super Admin created successfully",
-  "data": { user_object }
-}
-```
+#### `POST /init-super-admin`
+- **Purpose**: Seed the initial super admin account (disabled once 5 admins exist).
+- **Body**: `UserCreate` schema.
 
-#### 2. Login
-```
-POST /login
-Purpose: Authenticate user and initiate login
-Body: {
-  "email": "user@company.com",
-  "password": "password123"
-}
-Response: 200 OK
-{
-  "otp_required": true/false,
-  "email": "user@company.com",
-  "access_token": "JWT..." (if employee),
-  "token_type": "bearer"
-}
-```
+#### `POST /login`
+- **Purpose**: Authenticate user and initiate verification.
+- **Body**: `LoginRequest` (email, password).
+- **Response**: `{ "otp_required": true }` for Admin/Manager; `{ "access_token": "..." }` for Employee.
 
-#### 3. Verify OTP
-```
-POST /verify-otp
-Purpose: Complete 2FA verification for Admin/Manager
-Body: {
-  "email": "admin@company.com",
-  "otp": "123456"
-}
-Response: 200 OK
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIs...",
-  "token_type": "bearer"
-}
-```
+#### `POST /verify-otp`
+- **Purpose**: Verify the 6-digit OTP code for Admin/Manager login.
+- **Body**: `OTPVerifyRequest` (email, otp).
+- **Response**: JWT access token.
 
-### User Management Endpoints
+#### `POST /logout`
+- **Purpose**: Invalidate JWT token.
+- **Headers**: Authorization Bearer Token.
 
-#### 1. Create User (Generic)
-```
-POST /users
-Purpose: Create admin/manager/employee
-Auth: Requires Manager+ privileges
-Body: {
-  "email": "john@company.com",
-  "full_name": "John Smith",
-  "role": "employee",
-  "password": "password123",
-  "phone_number": "+1234567890"
-}
-Response: 201 Created
-```
+---
 
-#### 2. Create Manager
-```
-POST /managers
-Purpose: Create manager specifically
-Auth: Requires Admin privileges
-Body: {
-  "email": "manager@company.com",
-  "full_name": "Manager Name",
-  "password": "password123"
-}
-Response: 201 Created
-```
+### User & Permission Management
 
-#### 3. Get All Users
-```
-GET /users
-Purpose: Retrieve all users
-Auth: Requires Manager+ privileges
-Response: 200 OK
-{
-  "status_code": 200,
-  "data": [{ user objects }]
-}
-```
+#### `POST /users`
+- **Purpose**: Create a new account (Admin, Manager, or Employee). Manager+ permissions required.
 
-#### 4. Update Dashboard Row
-```
-PATCH /dashboard/orders/{order_db_id}
-Purpose: Update client, order, or payment info
-Auth: Authenticated users
-Body: { DashboardUpdate fields }
-```
+#### `POST /managers`
+- **Purpose**: Specialized endpoint to create a Manager. Manager+ permissions required.
 
-#### 5. Update Own Password
-```
-PUT /users/me/password
-Purpose: Change current user's password
-Auth: All roles
-Body: {
-  "new_password": "newpass456"
-}
-Response: 200 OK
-```
+#### `GET /users`
+- **Purpose**: Return all registered Employees. Password fields are decrypted on response. Manager+ permissions required.
 
-#### 6. Update Others' Password
-```
-PUT /users/password
-Purpose: Admin/Manager updates employee password
-Auth: Requires Manager+ privileges
-Body: {
-  "email": "employee@company.com",
-  "new_password": "newpass456"
-}
-Response: 200 OK
-```
+#### `GET /admins`
+- **Purpose**: Return all Managers and Admins. Passwords decrypted on response. Admin permissions required.
 
-#### 7. Update Permissions
-```
-PUT /users/permissions
-Purpose: Assign column-level dashboard permissions
-Auth: Requires Manager+ privileges
-Body: {
-  "email": "employee@company.com",
-  "permissions": {
-    "dashboard": ["status", "remarks", "amount"]
-  }
-}
-Response: 200 OK
-```
+#### `PUT /users/permissions`
+- **Purpose**: Update an Employee's auto-generation ranges (`id_range_start` and `id_range_end`). Manager+ permissions required.
 
-### Client Management Endpoints
+#### `PUT /users/me/password`
+- **Purpose**: Update current authenticated user password.
 
-#### 1. Create Client
-```
-POST /clients
-Purpose: Add new client
-Auth: Requires Manager+ privileges
-Body: {
-  "client_id": "CL-001",
-  "name": "Research Labs Inc",
-  "country": "USA",
-  "email": "contact@labs.com",
-  "whatsapp_no": "+1234567890"
-}
-Response: 201 Created
-```
+#### `PUT /users/password`
+- **Purpose**: Reset another user's password. Managers can only update Employees; Admins can update any user (except other Admins).
 
-#### 2. Get All Clients
-```
-GET /clients
-Purpose: Retrieve all clients (or assigned for employees)
-Auth: Authenticated users
-Response: 200 OK
-{
-  "data": [{ client objects }]
-}
-```
+---
 
-#### 3. Get Client by ID
-```
-GET /clients/{client_id}
-Purpose: Get specific client details
-Auth: Requires Manager+ privileges
-Response: 200 OK
-```
+### Profile Customization & Photo Uploads
 
-#### 4. Assign Client
-```
-POST /clients/assign
-Purpose: Assign client to employee/manager
-Auth: Requires Manager+ privileges
-Body: {
-  "client_id": "CL-001",
-  "handler_email": "employee@company.com"
-}
-Response: 200 OK
-```
+#### `PUT /users/profile` / `PUT /users/{email}/profile`
+- **Purpose**: Update contact details (personal email, personal phone, branch) and upload a profile photo (max 500KB).
+- **Request Type**: `multipart/form-data`.
 
-### Order Management Endpoints
+#### `GET /users/{email}/photo`
+- **Purpose**: Retrieve binary user avatar image, falling back to `static/default_user.png`.
 
-#### 1. Create Order
-```
-POST /orders
-Purpose: Create new order
-Auth: Requires Manager+ privileges
-Body: {
-  "order_id": "ORD-2024-001",
-  "reference_id": "REF-USER-001",
-  "client_id": "CL-001",
-  "journal_name": "Nature",
-  "title": "Advanced AI",
-  "order_type": "writing",
-  "total_amount": 5000
-}
-Response: 201 Created
-```
+#### `POST /users/profiles/append`
+- **Purpose**: Append an alternate profile display name to the user's `profile_names` array.
 
-#### 2. Get Orders
-```
-GET /orders
-Purpose: Retrieve orders
-Auth: Authenticated users
-Response: 200 OK
-```
+#### `POST /clients/{client_id}/photo`
+- **Purpose**: Upload a client avatar image. Manager+ permissions required.
 
-#### 3. Update Order
-```
-PUT /orders/{order_id}
-Purpose: Update order details
-Auth: Requires Manager+ privileges
-Response: 200 OK
-```
+#### `GET /clients/{client_id}/photo`
+- **Purpose**: Fetch binary client photo, falling back to `static/default_client.png`.
 
-### Payment Management Endpoints
+---
 
-#### 1. Create Payment
-```
-POST /payments
-Purpose: Record payment transaction
-Auth: Requires Manager+ privileges
-Body: {
-  "order_id": "ORD-2024-001",
-  "reference_id": "REF-USER-001",
-  "phase": 1,
-  "amount": 1500,
-  "payment_date": "2024-02-01",
-  "status": "paid"
-}
-Response: 201 Created
-```
+### Currency Converter
 
-#### 2. Get Payments
-```
-GET /payments
-Purpose: Retrieve payment records
-Auth: Authenticated users
-Response: 200 OK
-```
+#### `GET /currency/exchange-rate`
+- **Purpose**: Fetch live exchange rate from INR to USD, using caching to throttle external hits.
 
-### Dashboard Endpoints
+#### `POST /currency/inr-to-usd`
+- **Purpose**: Convert INR amount to USD using current rates.
+- **Body**: `{ "amount_inr": float }`
 
-#### 1. Get Dashboard Data
-```
-GET /dashboard
-Purpose: Retrieve dashboard statistics
-Auth: Authenticated users
-Response: 200 OK
-{
-  "data": {
-    "overall_amount": 150000,
-    "total_clients": 25,
-    "pending_orders": 5,
-    "recent_payments": [...]
-  }
-}
-```
+#### `POST /currency/usd-to-inr`
+- **Purpose**: Convert USD amount to INR using current rates.
+- **Body**: `{ "amount_usd": float }`
 
-#### 2. Update Dashboard
-```
-PUT /dashboard/{order_id}
-Purpose: Update dashboard-specific fields
-Auth: Requires column permission
-Body: {
-  "status": "updated",
-  "remarks": "Processing..."
-}
-Response: 200 OK
-```
+---
+
+### Client Management
+
+#### `POST /clients`
+- **Purpose**: Create a new client record.
+
+#### `GET /clients`
+- **Purpose**: List clients. For Employees, only assigned clients are returned. Response includes options/metadata for dashboard dropdowns.
+
+#### `GET /clients/{client_id}`
+- **Purpose**: Fetch detailed info for a single client. Manager+ permissions required.
+
+#### `POST /clients/assign`
+- **Purpose**: Assign an Employee as handler to a client. Manager+ permissions required.
+
+---
+
+### Order, Manuscript & Payment Operations
+
+#### `POST /orders`
+- **Purpose**: Create a standalone order. Manager+ permissions required.
+
+#### `GET /orders`
+- **Purpose**: List orders. Employees are restricted to orders of assigned clients.
+
+#### `POST /manuscripts`
+- **Purpose**: Record a manuscript submission. Manager+ permissions required.
+
+#### `GET /manuscripts`
+- **Purpose**: Fetch manuscripts. Scoped to employee assignments if not Admin/Manager.
+
+#### `POST /payments`
+- **Purpose**: Record a billing phase transaction. Manager+ permissions required.
+
+#### `GET /payments`
+- **Purpose**: List billing phase details.
+
+#### `GET /payments/history`
+- **Purpose**: Fetch audit history entries from `payment_history_collection`.
+
+#### `GET /payments/pending-summary`
+- **Purpose**: Retrieve summary details and rankings of pending balances. Manager+ permissions required.
+
+---
+
+### Dashboard & Unified API
+
+#### `GET /dashboard/orders`
+- **Purpose**: Unified main dashboard endpoint. Executes an aggregation query linking client details, orders, and payment records into flat rows. Supported by caching layers.
+
+#### `PATCH /dashboard/orders/{order_db_id}`
+- **Purpose**: Batch update details (Client fields, Order fields, Payment phases) in a single request.
+- **Database Synchronization**: Updates to shared client fields ripple across related documents. Changing `client_id` propagates the new key across Orders, Payments, and Manuscripts collections. Automatically logs mutations in the `payment_history` collection.
+
+#### `POST /unified/create`
+- **Purpose**: Create Client, Order, Manuscript, and Payment documents in a single transaction-like request.
+- **Flow**:
+  1. Checks if client exists by `client_id` or name; creates new client if missing.
+  2. Automatically links or creates a manuscript if specified.
+  3. Sequentially auto-generates order serial number (`s_no`) and unique system-wide `order_id`.
+  4. Automatically flows links (e.g., `payment_drive_link`) from client record to order if not overridden.
+  5. Optionally records initial payment details and updates client order count (`total_orders`).
 
 ---
 
 ## Key Features
 
-### 1. Multi-tier RBAC System
+### 1. Symmetric Password Encryption
+Storing passwords with Fernet symmetric encryption instead of hashing allows managers and admins to recover passwords to provide support or audits for employee workspace accounts.
 
-**Three Role Levels:**
+### 2. Auto-generated Padded IDs
+IDs are formatted with a year prefix and serial index (e.g., `CL-2026-0001`). This ensures clean record tracking. Ranges are validated against other employee ranges to prevent overlap collisions.
 
-- **Admin**: 
-  - Full system access
-  - Maximum 5 Admins allowed
-  - Can create other Admins
-  - 2FA required for login
+### 3. Unified Aggregated APIs
+Endpoints `/dashboard/orders` and `/unified/create` reduce roundtrips. Instead of querying individual resources, the dashboard joins collections using MongoDB aggregation lookups.
 
-- **Manager**: 
-  - Can manage employees
-  - Full dashboard access
-  - Can assign permissions
-  - 2FA required for login
-
-- **Employee**: 
-  - Limited to assigned clients
-  - Can only view/update permitted dashboard columns
-  - No 2FA required
-  - Restricted action set
-
-### 2. Two-Factor Authentication (2FA)
-
-- **OTP Method**: Email-based 6-digit code
-- **Who Uses**: Admin and Manager roles only
-- **Duration**: 15-minute expiry
-- **Delivery**: SMTP email service
-- **Implementation**: Stored in `otps` collection
-
-**Flow**:
-1. User enters email + password
-2. System sends OTP to email
-3. User verifies OTP within 15 minutes
-4. System generates JWT token
-
-### 3. Column-Level Permissions
-
-Employees can only update specific dashboard fields as granted by Admin/Manager.
-
-**Permission Structure**:
-```javascript
-permissions: {
-  dashboard: ["status", "remarks", "amount"]  // Granted columns
-}
-```
-
-**Validation**: 
-- Each update request checks if user has permission for modified fields
-- Returns 403 Forbidden if unauthorized
-
-### 4. JWT Token Management
-
-- **Type**: HS256 (HMAC with SHA-256)
-- **Payload**: Email (sub), Expiration (exp)
-- **Storage**: Database tokens collection (for audit trail)
-- **Validation**: Every protected endpoint validates token
-
-### 5. Comprehensive Audit Trail
-
-- `created_at`: Records creation timestamp
-- `updated_at`: Tracks last modification
-- `tokens` collection: Maintains session history
-- `otps` collection: Logs authentication attempts
-
-### 6. Denormalized Data for Performance
-
-- `clients.total_orders`: Count stored directly
-- `orders.payment_status`: Cached state from payments
-- Reduces need for expensive aggregations
-- Trade-off: Consistency responsibility on updates
+### 4. Append-Only Payment Logs
+The `payment_history` collection captures snapshots of order totals, amounts paid, received accounts, and phase completions, building a clean transaction timeline.
 
 ---
 
 ## Security Implementation
 
-### 1. Password Security
+### 1. Secure Transport & CORS
+CORS middleware checks requests against a configured whitelist of allowed origins (e.g., Vercel domains, localhost) and strips trailing slashes to prevent matching mismatches.
 
-```python
-# Using bcrypt with random salt
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+### 2. Session Integrity
+JWT verification validates signature, expiration, and checks the token's presence in the database `tokens` collection, ensuring that logged-out/revoked sessions cannot hit endpoints.
 
-# Hashing: Automatic salt generation, random rounds
-hashed = pwd_context.hash(plain_password)
+### 3. Input Sanitization & Validation
+Pydantic V2 models parse input variables, verifying constraints like email formats (`EmailStr`), non-empty strings, and converting empty strings to `None` for database compatibility.
 
-# Verification: Constant-time comparison
-is_valid = pwd_context.verify(plain_password, hashed)
-```
-
-**Security Features**:
-- Bcrypt with automatic salt (2^rounds iterations)
-- Never stores plaintext passwords
-- Constant-time comparison prevents timing attacks
-
-### 2. JWT Token Security
-
-```python
-# Algorithm: HS256 (HMAC-SHA256)
-# Secret: Strong 256+ bit key
-# Expiry: Configurable (default 120 minutes)
-
-token = jwt.encode(
-  {"sub": email, "exp": expire_time},
-  SECRET_KEY,
-  algorithm="HS256"
-)
-```
-
-**Security Features**:
-- Cryptographically signed tokens
-- Expiration enforced on every request
-- Token revocation possible (check tokens table)
-
-### 3. OTP Security
-
-```python
-# Generated as: 6 random digits
-# Delivered: Via secure SMTP over TLS
-# Storage: In database with timestamp
-# Expiry: 15-minute window
-```
-
-**Security Features**:
-- Random generation using secure RNG
-- Limited 15-minute window
-- Auto-expires in database
-- Only 6-digit space (brute-force resistant with rate limiting)
-
-### 4. CORS Security
-
-```python
-# Whitelist specific origins
-ALLOWED_ORIGINS = [
-  "https://marketing-dashboard.vercel.app",
-  "http://localhost:5173"
-]
-
-# Only specified origins can make requests
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS)
-```
-
-**Security Features**:
-- Prevents unauthorized cross-origin requests
-- Configurable per environment
-- Credentials allowed only for trusted origins
-
-### 5. Input Validation
-
-```python
-# Pydantic models validate all inputs
-class UserCreate(BaseModel):
-  email: EmailStr            # Email format validation
-  full_name: str
-  password: str              # Length/complexity validated
-  role: UserRole             # Enum restriction
-
-# Automatic validation + sanitization
-```
-
-**Security Features**:
-- Type validation (prevents injection)
-- Format validation (EmailStr)
-- Enum validation (restricted values)
-- Length constraints (prevents buffer overflow)
-
-### 6. Error Handling & Information Disclosure
-
-```python
-# Generic error responses (no leak of internal details)
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-  return JSONResponse(
-    status_code=500,
-    content={
-      "status": "error",
-      "message": "Internal server error",  # Generic message
-      "data": None
-    }
-  )
-```
-
-**Security Features**:
-- No stack traces in responses
-- Generic error messages
-- Prevents information leakage
-
-### 7. HTTPS & Transport Security
-
-- **Production**: All HTTPS connections required
-- **CORS**: Credentials allowed only on HTTPS
-- **Headers**: Secure cookie flags (if using cookies)
-- **HSTS**: Should be configured on reverse proxy
-
-### 8. Rate Limiting Recommendations
-
-*Currently not implemented, but recommended for production*:
-
-```python
-# Example using slowapi
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-
-@app.post("/login")
-@limiter.limit("5/minute")  # 5 attempts per minute
-def login(request: Request, email: str, password: str):
-  ...
-```
+### 4. Masked Error Disclosures
+A global exception handler catches unhandled internal errors, returning a generic `Internal Server Error` message to clients to prevent database details or server traces from leaking.
 
 ---
 
 ## Deployment & Configuration
 
-### Environment Variables (.env)
-
+### Environment Configuration (.env example)
 ```bash
-# MongoDB
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net
+# Database Configuration
+MONGO_URI=mongodb+srv://...
 DB_NAME=email_dashboard
 
 # JWT Configuration
-SECRET_KEY=your-256-bit-secret-key-here
+SECRET_KEY=yoursecretkeyhere
 ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=120
+ACCESS_TOKEN_EXPIRE_MINUTES=600
 
-# SMTP (for OTP emails)
+# Two-Way Encryption
+ENCRYPTION_KEY=yourfernetencryptionkey32bytes=
+
+# SMTP Config
 SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
-EMAIL_FROM=noreply@company.com
+SMTP_USERNAME=sender@gmail.com
+SMTP_PASSWORD=app-password
+EMAIL_FROM=noreply@dashboard.com
 
-# CORS
-ALLOWED_ORIGINS=https://frontend.vercel.app,http://localhost:5173
-
-# Server
-HOST=0.0.0.0
-PORT=8000
-```
-
-### Docker Deployment (Recommended)
-
-```dockerfile
-FROM python:3.14-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### Running Locally
-
-```bash
-# Clone and setup
-git clone <repo>
-cd "Email Dashboard"
-
-# Create virtual environment
-uv venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install dependencies
-uv sync
-
-# Create .env file
-cp .env.example .env
-# Edit .env with your settings
-
-# Run server
-uv run uvicorn main:app --reload
-
-# Access API
-# Swagger UI: http://localhost:8000/docs
-# ReDoc: http://localhost:8000/redoc
-```
-
-### Deployment Platforms
-
-#### Vercel (Frontend-ready)
-```yaml
-# vercel.json
-{
-  "buildCommand": "echo 'Frontend deployment'",
-  "outputDirectory": "dist"
-}
-```
-
-#### Render.com (Backend-ready)
-```yaml
-# render.yaml
-services:
-  - type: web
-    name: email-dashboard-api
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0
+# CORS Configuration (Comma Separated)
+ALLOWED_ORIGINS=http://localhost:5173,https://my-dashboard.vercel.app
 ```
 
 ---
 
 ## Workflow Examples
 
-### Example 1: Employee Login & View Assigned Clients
+### Example 1: Creating an Employee & Allocating ID Range
+1. Admin logs in with OTP validation.
+2. Admin opens user creation form, providing email and name. Admin sets `id_range_start: 500` and `id_range_end: 600`.
+3. Server executes range check. If no other employee occupies bounds in `[500, 600]`, the user is inserted.
+4. Admin can view the encrypted employee password securely decrypted on their panel.
 
-```
-1. Employee navigates to login page
-2. Submits email + password to POST /login
-3. Server verifies credentials
-4. Server checks role (employee) → No OTP required
-5. Server generates JWT token
-6. Returns access_token to frontend
-7. Frontend stores token in localStorage
-8. Employee navigates to "My Clients"
-9. Frontend sends GET /clients with Authorization header
-10. Server validates JWT
-11. Server queries clients where client_handler = current user
-12. Returns only assigned clients
-```
-
-### Example 2: Manager Creating Employee & Assigning Client
-
-```
-1. Manager logs in (Admin/Manager) → OTP verification
-2. Navigates to "Create Employee"
-3. Fills form: email, name, password → POST /users
-4. Server verifies manager role
-5. Server hashes password, creates user
-6. Employee account created in users collection
-7. Manager navigates to "Assign Client"
-8. Selects employee + client → POST /clients/assign
-9. Server updates clients.client_handler
-10. Assignment complete
-11. Employee can now see client on next login
-```
-
-### Example 3: Order Creation & Payment Tracking
-
-```
-1. Manager creates order: POST /orders
-   - Sets total_amount: 5000
-   - Sets payment_status: "pending"
-2. Payment Phase 1 arrives: POST /payments
-   - Phase: 1, Amount: 1500
-   - Creates payment record
-3. Order payment_status updates to: "partial"
-4. Payment Phase 2 arrives: POST /payments
-   - Phase: 2, Amount: 1500
-5. Payment Phase 3 arrives: POST /payments
-   - Phase: 3, Amount: 2000
-6. Total payments now = 5000
-7. Order payment_status updates to: "paid"
-8. Order marked complete on dashboard
-```
-
-### Example 4: Column Permission Assignment
-
-```
-1. Admin wants to restrict employee dashboard access
-2. Admin navigates to "Manage Permissions"
-3. Selects employee + specific columns
-4. Sends PUT /users/permissions with:
-   {
-     "email": "employee@company.com",
-     "permissions": {
-       "dashboard": ["status", "remarks"]  // Only these columns editable
-     }
-   }
-5. Server updates users.permissions
-6. Employee can still VIEW all columns
-7. But can only EDIT "status" and "remarks"
-8. Attempts to edit other columns return 403 Forbidden
-```
+### Example 2: Unified Submission Flow (Employee)
+1. Employee fills out the Unified Creation form with client, paper, and payment details.
+2. Employee submits the form, hitting `/unified/create`.
+3. Server generates Client ID `CL-2026-0501` (from range start 500) and Order ID `ORD-2026-009`.
+4. Manuscript document is registered, linking client and order.
+5. First payment phase is recorded. Client's total order count increments to `1`.
+6. Client and orders are immediately available on the employee's dashboard.
 
 ---
 
-## API Response Format
+*This document serves as the absolute architecture outline for the Email Dashboard API.*
 
-All endpoints follow a consistent response structure:
-
-### Success Response (2xx)
-```json
-{
-  "status_code": 200,
-  "status": "success",
-  "message": "Operation completed successfully",
-  "data": { /* actual data */ }
-}
-```
-
-### Error Response (4xx, 5xx)
-```json
-{
-  "status_code": 400,
-  "status": "error",
-  "message": "Email already registered",
-  "data": null
-}
-```
-
----
-
-## Performance Optimization Strategies
-
-### 1. Database Indexing
-- Single-field indexes on frequently queried fields (`email`, `client_id`, `order_id`)
-- Composite indexes for multi-field queries
-- Regular index analysis and maintenance
-
-### 2. Query Optimization
-```python
-# ❌ Inefficient: N+1 query problem
-for client in clients:
-  orders = orders_collection.find({"client_id": client["client_id"]})
-
-# ✅ Efficient: Bulk query with filtering
-all_orders = orders_collection.find({"client_id": {"$in": client_ids}})
-```
-
-### 3. Caching Strategy
-- Cache user permissions at login (JWT claims)
-- Cache frequently accessed clients (Redis recommended)
-- Invalidate cache on updates
-
-### 4. Pagination
-```python
-# For large result sets
-GET /orders?page=1&limit=50
-```
-
-### 5. Response Compression
-```python
-# GZipMiddleware automatically compresses responses > 1KB
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-```
-
----
-
-## Monitoring & Maintenance
-
-### Health Check Endpoint (Recommended Addition)
-```python
-@app.get("/health")
-def health_check():
-  """Check API and database connectivity"""
-  return {
-    "status": "healthy",
-    "database": "connected",
-    "timestamp": datetime.utcnow()
-  }
-```
-
-### Logging (Recommended Addition)
-```python
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-logger.info(f"User {email} logged in successfully")
-logger.warning(f"Failed login attempt for {email}")
-logger.error(f"Database connection failed: {error}")
-```
-
-### Metrics to Monitor
-- Request response times
-- Database query duration
-- Error rates by endpoint
-- JWT token generation rate
-- OTP delivery success rate
-
----
-
-## Troubleshooting
-
-### Issue: Login fails with "Could not validate credentials"
-**Cause**: JWT token expired or invalid secret key
-**Solution**: 
-- Check `ACCESS_TOKEN_EXPIRE_MINUTES` setting
-- Verify `SECRET_KEY` consistency
-- Clear browser cache/localStorage
-
-### Issue: OTP email not received
-**Cause**: SMTP configuration incorrect or email service issue
-**Solution**:
-- Verify SMTP credentials in .env
-- Check email spam folder
-- Test SMTP connection separately
-- Verify EMAIL_FROM is correct
-
-### Issue: MongoDB connection timeout
-**Cause**: Invalid MONGO_URI or network issues
-**Solution**:
-- Verify MONGO_URI format
-- Check MongoDB Atlas IP whitelist
-- Ensure network connectivity
-- Test connectivity manually with `mongosh`
-
-### Issue: CORS error when accessing from frontend
-**Cause**: Frontend origin not in ALLOWED_ORIGINS
-**Solution**:
-- Add frontend URL to ALLOWED_ORIGINS in .env
-- Verify exact protocol (http/https)
-- Check for trailing slashes
-
----
-
-## Summary
-
-The **Email Dashboard API** is a production-ready backend system with:
-
-✅ **Secure Authentication**: JWT + OTP 2FA for privileged users
-✅ **Granular Authorization**: 3-tier RBAC with column-level permissions
-✅ **Comprehensive Data Model**: 7 MongoDB collections with referential integrity
-✅ **RESTful API**: 20+ endpoints with consistent response format
-✅ **Error Handling**: Global exception handlers with generic error messages
-✅ **Performance**: Indexed queries, compressed responses, denormalized data
-✅ **Scalability**: Stateless design, database-backed sessions, cloud-ready
-✅ **Documentation**: Complete API docs, database schema, RBAC rules
-
-**Next Steps for Enhancement**:
-1. Add rate limiting on login/OTP endpoints
-2. Implement request logging and audit trail
-3. Add health check and metrics endpoints
-4. Set up automated backups for MongoDB
-5. Implement API versioning for future changes
-6. Add comprehensive integration tests
-7. Set up CI/CD pipeline for automated deployments
-
----
-
-*This document was generated as a comprehensive guide to the Email Dashboard API architecture and implementation.*
-
-**Last Updated**: April 15, 2026
-**Version**: 1.0.0
-**Author**: Architecture Documentation Team
+**Last Updated**: May 20, 2026  
+**API Version**: 1.0.0-Phase1  
+**Target Environment**: Vercel (Frontend) & Render/Docker (Backend)  
