@@ -1,0 +1,167 @@
+# Database Schema & Data Relationships - Email Dashboard
+
+This document provides a detailed overview of the MongoDB collections and the relational structure of the Email Dashboard API.
+
+---
+
+## 1. Collections Overview
+
+### users
+Stores user accounts, roles, and access permissions.
+- **Fields**: `email`, `full_name`, `password_hash`, `password` (plaintext, testing only), `role` (`admin` / `manager` / `employee`), `phone_number` (optional), `permissions` (`{"dashboard": []}` by default), `created_at`.
+
+### clients
+Stores client information.
+- **Fields**: `client_id` (Primary Key, e.g. `CL-001`), `name`, `country`, `email`, `whatsapp_no`, `client_ref_no` (optional — given by client), `client_link`, `bank_account`, `affiliation`, `total_orders` (denormalised count), `client_handler` (links to `users.full_name`), `created_at`.
+
+### manuscripts
+Stores records for manuscripts submitted by clients. **Only ~30% of clients provide manuscripts.**
+- **Fields**: `manuscript_id` (Primary Key, e.g. `MS-CL-001-1`), `title`, `journal_name` (target journal), `order_type` (`writing` / `modification` / `proofreading`), `client_id` (Foreign Key → `clients`), `created_at`.
+
+### orders
+Stores order details linked to clients. Each order represents one paper and has a unique `reference_id`.
+- **Fields**: `order_id` (Primary Key, e.g. `ORD-2024-001`), `reference_id` (**Unique** — created by users/employees for each paper), `client_ref_no` (optional — from client), `s_no`, `order_date`, `client_id` (Foreign Key → `clients`), `manuscript_id` (Foreign Key → `manuscripts`, **NULLABLE** — only ~30% of orders have manuscripts), `journal_name` (target journal), `title` (paper title), `order_type`, `index` (`SCI` / `Scopus` / `ESCI`), `rank` (`Q1`–`Q4`), `currency` (`USD` / `INR`), `total_amount`, `writing_amount`, `modification_amount`, `po_amount`, `writing_start_date`, `writing_end_date`, `modification_start_date`, `modification_end_date`, `po_start_date`, `po_end_date`, `payment_status` (`pending` / `partial` / `paid`), `remarks`, `created_at`, `updated_at`.
+
+### payments
+Stores payment transactions linked to orders and clients, supporting up to 3 payment phases.
+- **Fields**: `client_ref_number` (optional), `reference_id` (copied from order for lookup), `client_id` (Foreign Key → `clients`), `order_id` (Foreign Key → `orders`), `phase` (1, 2, or 3), `amount`, `payment_received_account`, `payment_date`, `phase_1_payment`, `phase_1_payment_date`, `phase_2_payment`, `phase_2_payment_date`, `phase_3_payment`, `phase_3_payment_date`, `status` (`pending` / `paid`), `created_at`.
+
+### tokens
+Stores active session JWTs.
+- **Fields**: `user_email` (Foreign Key → `users`), `token`, `created_at`.
+
+### otps
+Temporary storage for 2FA login codes (Admin & Manager roles only).
+- **Fields**: `email` (Foreign Key → `users`), `otp`, `created_at`.
+
+---
+
+## 2. Key Fields Explained
+
+| Field | Who creates it? | Where it lives | Required? | Unique? |
+|---|---|---|---|---|
+| `reference_id` | **Your users** (employees/admins) | `orders` (primary), `payments` (copied) | **Yes** | **Yes** — globally unique |
+| `client_ref_no` | **The client** themselves | `clients` table | **No** — optional | No |
+| `order_id` | System auto-generated | `orders` | Yes | Yes |
+| `journal_name` | Your users | `orders` + `manuscripts` | No — optional | No |
+| `title` | Your users | `orders` + `manuscripts` | No — optional | No |
+
+---
+
+## 3. Data Relationships
+
+The system maintains referential integrity through logical IDs (e.g., `client_id`) rather than MongoDB ObjectIDs for easier cross-service tracking.
+
+```
+erDiagram
+    Users ||--o{ Clients : "handled by"
+    Users ||--o{ Clients : "handled by"
+    Users ||--o{ Tokens : "owns"
+    Users ||--o{ OTPs : "receives"
+
+    Clients ||--o{ Manuscripts : "submits (optional, ~30%)"
+    Clients ||--o{ Orders : "places"
+    Clients ||--o{ Payments : "makes"
+
+    Manuscripts |o--o{ Orders : "linked to (optional)"
+
+    Orders ||--o{ Payments : "has"
+```
+
+### Relationship Details:
+
+1. **User → Client**:
+   - Relationship: One-to-Many.
+   - Link: `users.full_name` matches `clients.client_handler`.
+   - Purpose: Employees can only view/manage clients assigned to them; Managers/Admins see all.
+
+2. **User → Order**:
+   - Relationship: Unified via Client.
+   - Purpose: Tracks which employee is handling a specific order (inferred from `clients.client_handler`).
+
+3. **Client → Manuscript**:
+   - Relationship: One-to-Many (OPTIONAL — only ~30% of clients submit manuscripts).
+   - Link: `clients.client_id` matches `manuscripts.client_id`.
+
+4. **Client → Order**:
+   - Relationship: One-to-Many. Each order = one paper, each with its own `reference_id`.
+   - Link: `clients.client_id` matches `orders.client_id`.
+
+5. **Manuscript → Order** (Optional):
+   - Relationship: One-to-Many (or None — manuscript_id is NULLABLE on orders).
+   - Link: `manuscripts.manuscript_id` matches `orders.manuscript_id`.
+   - Purpose: Links orders to submitted manuscripts when available.
+
+6. **Order → Payment**:
+   - Relationship: One-to-Many (up to 3 payment phases).
+   - Link: `orders.order_id` matches `payments.order_id`.
+   - Purpose: Tracks multiple payment phases for a single order.
+
+7. **Client → Payment**:
+   - Relationship: One-to-Many.
+   - Link: `clients.client_id` matches `payments.client_id`.
+   - Purpose: Supports country-level financial aggregation for pie charts.
+
+---
+
+## 4. ID Conventions
+
+- **Client ID**: `CL-XXX` (e.g., `CL-001`)
+- **Reference ID**: Free-form, unique per order (e.g., `REF-0001`) — created by users
+- **Manuscript ID**: `MS-[Client_ID]-[Seq_No]` (e.g., `MS-CL-001-1`)
+- **Order ID**: `ORD-[Year]-[Seq_No]` (e.g., `ORD-2024-001`)
+- **Client Ref No**: Optional, given by client (e.g., `REF-2001`)
+
+---
+
+## 5. Key API Schemas
+
+### DashboardOrderResponse
+A flattened, joined view of client + order + payment data returned by the main dashboard endpoint.
+- Merges fields from: `clients` (country, email, whatsapp_no, client_link, bank_account, affiliation), `orders` (reference_id, journal_name, title, amounts, dates, status, index, rank), `payments` (phase_1/2/3 payment amounts and dates).
+
+### DashboardUpdate
+Used to update client, order, and payment data in a single request.
+- **Client fields**: `client_location` (maps to `country`), `client_Email`, `client_whatsapp_number`, `client_link`, `bank_account`, `client_affiliations`.
+- **Order fields**: `order_date`, `reference_id`, `ref_no`, `journal_name`, `title`, `order_type`, `index`, `rank`, `currency`, `total_amount`, `writing_amount`, `modification_amount`, `po_amount`, all phase start/end dates, `payment_status`, `remarks`.
+- **Payment fields**: `phase_1_payment`, `phase_1_payment_date`, `phase_2_payment`, `phase_2_payment_date`, `phase_3_payment`, `phase_3_payment_date`.
+
+### ClientDetailResponse
+Per-client financial summary returned inside `/users/me/details`.
+- Aggregated fields: `total_amount`, `writing_amount`, `modification_amount`, `po_amount`, `paid_amount`, `remaining_amount`, `payment_status`.
+
+### UserDetailResponse
+Full user detail object returned by `/users/me/details`.
+- Includes: all `UserBase` fields + `handled_clients: list[ClientDetailResponse]`, `dashboard_stats: DashboardStats`, `country_split: dict[str, float]` (used for pie chart visualisation).
+
+### DashboardStats
+Top-level KPIs on the dashboard.
+- Fields: `overall_amount`, `overall_amount_percentage`, `total_clients`, `total_clients_percentage`, `pending_count`, `pending_count_percentage`, `reject_count`, `reject_count_percentage`.
+
+---
+
+## 6. Role-Based Access Control (RBAC)
+
+| Role     | Clients Visible        | Orders Visible                | Payments Visible         |
+|----------|------------------------|-------------------------------|--------------------------|
+| Admin    | All clients            | All orders                    | All payments             |
+| Manager  | All clients            | All orders                    | All payments             |
+| Employee | Only assigned clients  | Orders for assigned clients   | Payments for assigned clients |
+
+- Admins and Managers require **OTP verification** (2FA via email) on login before receiving a JWT.
+- Employees receive a JWT directly on login.
+
+---
+
+## 7. Mock Data Summary
+
+| Collection  | Count | Notes                                      |
+|-------------|-------|--------------------------------------------| 
+| users       | 5     | 1 Admin, 2 Managers, 2 Employees           |
+| clients     | 10    | Mix of Universities and Corporate clients  |
+| manuscripts | ~3-6  | Only ~30% of clients get manuscripts       |
+| orders      | 30    | Each with unique reference_id; ~30% linked to manuscripts |
+| payments    | ~40   | Up to 3 phases per order                   |
+
+Default password for all mock users: `password123`
+Sample admin login: `robert.s@company.com`

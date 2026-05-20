@@ -1,0 +1,13 @@
+bcrypt<4.0.0
+fastapi
+cryptography>=41.0.0
+pydantic[email]>=2.12.5
+pymongo>=4.16.0
+python-dotenv>=1.2.2
+python-jose[cryptography]>=3.5.0
+requests>=2.33.1
+uvicorn>=0.44.0
+python-multipart
+cachetools>=5.3.0
+redis>=4.5.0
+aiosmtplib>=2.0.0

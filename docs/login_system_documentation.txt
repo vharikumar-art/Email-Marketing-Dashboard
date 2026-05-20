@@ -1,0 +1,83 @@
+# Email Dashboard Login System Documentation
+
+This document explains how the multi-tier Role-Based Access Control (RBAC) system works in the Email Dashboard API.
+
+## 1. User Roles and Hierarchy
+
+There are three roles in the system:
+
+1.  **Super Admin**: The highest level of authority.
+    *   **Constraint**: Maximum of 2 Super Admins can exist in the system.
+    *   **Permissions**: 
+        *   Can create Admins and Users.
+        *   Can promoted an existing user to Super Admin (up to the limit of 2).
+        *   Can change passwords for Admins, Users, and themselves.
+2.  **Admin**: Mid-level management.
+    *   **Permissions**:
+        *   Can create Users only.
+        *   Can change passwords for Users and themselves.
+3.  **User**: Standard access.
+    *   **Permissions**:
+        *   Can change their own password.
+
+## 2. Authentication Flow
+
+The system uses JWT (JSON Web Tokens) for authentication.
+
+1.  **Login**: User sends `email` and `password` to `POST /login`.
+2.  **Verification**: The server verifies the password against the stored bcrypt hash.
+3.  **Token Issuance**: If valid, the server returns a JWT access token.
+4.  **Authorization**: For subsequent requests, the user must include the token in the `Authorization` header as: `Bearer <your_token>`.
+
+## 3. Implementation Examples
+
+### Password Hashing (Python - passlib/bcrypt)
+
+The system uses `bcrypt` for secure password storage.
+
+```python
+from passlib.context import CryptContext
+
+# Configuration
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# 1. Create a password hash (for registration)
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+# 2. Verify a password (for login)
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+# Example Usage:
+plain_text = "my_secure_password"
+hashed = get_password_hash(plain_text)
+# Store 'hashed' in the database
+```
+
+### Initializing the System
+
+Since the roles are strictly enforced, you must initialize the first Super Admin using the bootstrap endpoint:
+
+**Endpoint**: `POST /init-super-admin`
+**Payload**:
+```json
+{
+  "email": "superadmin@example.com",
+  "password": "yourpassword",
+  "full_name": "Primary Super Admin"
+}
+```
+
+## 4. Key Endpoints
+
+- `POST /login`: Get access token.
+- `POST /admins`: Create new Admin or Super Admin (Super Admin only).
+- `POST /users`: Create new User (Admin or Super Admin).
+- `PUT /users/me/password`: Update your own password.
+- `PUT /users/password`: Update someone else's password (Tiered permission).
+
+## 5. Visibility Endpoints
+
+- `GET /users`: Get list of all regular Users (Admin or Super Admin).
+- `GET /admins`: Get list of all Admins and Super Admins (Super Admin only).

@@ -1,0 +1,36 @@
+{
+  "client_id": "CL-TEST-001",
+  "client_name": "Global Research Institute",
+  "client_country": "USA",
+  "client_email": "contact@globalresearch.edu",
+  "client_whatsapp_no": "+1-555-0123",
+  "client_ref_no": "GRI-2024-001",
+  "client_link": "https://www.globalresearch.edu",
+  "client_bank_account": "GRI-ACCOUNT-001",
+  "client_affiliation": "International Research University",
+  "clients_details": "Leading research institute specializing in AI and machine learning. Requires high-quality academic writing services for journal publications.",
+  "client_drive_link": "https://drive.google.com/drive/folders/global-research-client",
+  "payment_drive_link": "https://drive.google.com/drive/folders/global-research-payments",
+
+  "reference_id": "REF-GRI-2024-001",
+  "profile_name": "Academic Writing Profile - Dr. Smith",
+  "title": "Advanced Machine Learning Techniques for Medical Diagnosis",
+  "order_type": "writing",
+  "index": "SCI",
+  "rank": "Q1",
+  "journal_name": "Nature Machine Intelligence",
+  "write_start_date": "2024-01-15",
+  "profile_start_date": "2024-01-10",
+  "currency": "USD",
+  "payment_status": "pending",
+
+  "create_manuscript": true,
+  "manuscript_title": "Machine Learning Algorithms for Healthcare Applications",
+  "manuscript_journal_name": "Nature Machine Intelligence",
+
+  "create_payment": true,
+  "payment_amount": 2500.00,
+  "payment_phase": 1,
+  "payment_date": "2024-01-20",
+  "payment_received_account": "Primary Bank Account"
+}

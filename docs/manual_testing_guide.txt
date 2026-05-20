@@ -1,0 +1,163 @@
+# Manual Testing Guide - Email Dashboard API (Full Payloads)
+
+This guide provides comprehensive JSON examples for testing. Use these "Full Payloads" to verify that all database fields are correctly captured.
+
+---
+
+## 1. Authentication & Initialization
+
+### Step 1: Initialize Super Admin
+- **Endpoint**: `POST /init-super-admin`
+- **Goal**: Create an Admin account. Works as long as there are fewer than 5 admins.
+- **Full Body**:
+  ```json
+  {
+    "email": "superadmin@example.com",
+    "password": "SecurePassword123",
+    "full_name": "Ultimate Admin",
+    "role": "admin",
+    "phone_number": "+1234567890",
+    "permissions": {
+      "dashboard": ["remarks", "payment_status", "total_amount"]
+    }
+  }
+  ```
+
+### Step 2: Login
+- **Endpoint**: `POST /login`
+- **Body**: `{"email": "superadmin@example.com", "password": "SecurePassword123"}`
+- **Goal**: Receive an `access_token` and potential `otp_required` flag.
+
+---
+
+## 2. User & Permission Management
+
+### Create a Complete Employee (Admin/Manager Required)
+- **Endpoint**: `POST /users`
+- **Full Body**:
+  ```json
+  {
+    "email": "employee_test@example.com",
+    "password": "EmployeePassword123",
+    "full_name": "Test Employee",
+    "role": "employee",
+    "phone_number": "+0987654321",
+    "permissions": {
+      "dashboard": ["remarks", "client_whatsapp_number", "client_link", "payment_status"]
+    }
+  }
+  ```
+
+---
+
+## 3. Entity Management (Full Chain)
+
+### A. Create a Full Client
+- **Endpoint**: `POST /clients`
+- **Full Body**:
+  ```json
+  {
+    "client_id": "CL-FULL-001",
+    "name": "Acme Global Solutions",
+    "location": "New York, USA",
+    "email": "billing@acme.com",
+    "whatsapp_no": "+15550123456",
+    "client_ref_no": "REF-ACME-2024",
+    "client_link": "https://acmesolutions.com/portal",
+    "bank_account": "CHASE-987654321",
+    "affiliation": "Global Tech Alliance",
+    "total_orders": 0,
+    "client_handler": "Test Employee"
+  }
+  ```
+
+### B. Create a Detailed Manuscript
+- **Endpoint**: `POST /manuscripts`
+- **Full Body**:
+  ```json
+  {
+    "manuscript_id": "MS-FULL-001",
+    "title": "Advanced AI Research Paper",
+    "order_type": "Scientific Writing",
+    "client_id": "CL-FULL-001",
+    "client_ref_no": "REF-ACME-2024"
+  }
+  ```
+
+### C. Create a Detailed Order
+- **Endpoint**: `POST /orders`
+- **Full Body**:
+  ```json
+  {
+    "order_id": "ORD-FULL-001",
+    "client_id": "CL-FULL-001",
+    "manuscript_id": "MS-FULL-001",
+    "client_ref_no": "REF-ACME-2024",
+    "s_no": 1,
+    "order_date": "2024-04-11T10:00:00",
+    "order_type": "Scientific Writing",
+    "index": "A1",
+    "rank": "Tier 1",
+    "currency": "USD",
+    "total_amount": 1500.0,
+    "writing_amount": 800.0,
+    "modification_amount": 400.0,
+    "po_amount": 300.0,
+    "writing_start_date": "2024-04-12T09:00:00",
+    "writing_end_date": "2024-04-20T17:00:00",
+    "modification_start_date": "2024-04-21T09:00:00",
+    "modification_end_date": "2024-04-25T17:00:00",
+    "po_start_date": "2024-04-26T09:00:00",
+    "po_end_date": "2024-04-28T17:00:00",
+    "payment_status": "Partial",
+    "remarks": "Urgent project for key client"
+  }
+  ```
+
+### D. Create a Detailed Payment
+- **Endpoint**: `POST /payments`
+- **Full Body**:
+  ```json
+  {
+    "client_id": "CL-FULL-001",
+    "phase": 1,
+    "amount": 500.0,
+    "payment_received_account": "HDFC-BANK-HQ",
+    "payment_date": "2024-04-11T12:00:00"
+  }
+  ```
+
+---
+
+## 4. Dashboard & Assignment Features
+
+### A. Assign Client (Admin/Manager New Feature)
+- **Endpoint**: `POST /clients/assign`
+- **Full Body**:
+  ```json
+  {
+    "client_id": "CL-FULL-001",
+    "employee_email": "employee_test@example.com"
+  }
+  ```
+
+### B. Bulk Dashboard Update
+- **Endpoint**: `PATCH /dashboard/orders/ORD-FULL-001`
+- **Full Body (Updated many fields at once)**:
+  ```json
+  {
+    "client_location": "London, UK",
+    "client_whatsapp_number": "+447700900123",
+    "order_type": "Proofreading",
+    "total_amount": 1600.0,
+    "payment_status": "Completed",
+    "remarks": "Updated after client consultation",
+    "phase_1_payment": 500.0,
+    "phase_1_payment_date": "2024-04-11T12:00:00"
+  }
+  ```
+
+---
+
+## 5. Constraint Verification
+- **Test Max 5 Admins**: Try to create a 6th Admin via `POST /users` or `POST /init-super-admin`. It should return a `400 Bad Request` with "Maximum of 5 Admins allowed".

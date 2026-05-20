@@ -1,0 +1,36 @@
+{
+  "info": {
+    "name": "Dashboard Update Test",
+    "description": "Test case for dashboard order update with payment fields",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Update Dashboard Order - Payment Fields",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer YOUR_JWT_TOKEN_HERE"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"phase_3_payment\": 1,\n  \"phase_3_payment_date\": \"2024-02-10\",\n  \"phase_3_payment_details\": \"Final installment\",\n  \"paid_amount\": 1,\n  \"order_status\": \"completed\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/dashboard/orders/YOUR_ORDER_DB_ID_HERE",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["dashboard", "orders", "YOUR_ORDER_DB_ID_HERE"]
+        }
+      }
+    }
+  ]
+}

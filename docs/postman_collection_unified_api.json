@@ -1,0 +1,65 @@
+[
+  {
+    "name": "Full Unified Create (Client + Order + Manuscript + Payment)",
+    "method": "POST",
+    "url": "http://localhost:8000/unified/create",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer YOUR_JWT_TOKEN_HERE",
+        "type": "text"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json",
+        "type": "text"
+      }
+    ],
+    "body": {
+      "mode": "raw",
+      "raw": "{\n  \"client_id\": \"CL-TEST-001\",\n  \"client_name\": \"Global Research Institute\",\n  \"client_country\": \"USA\",\n  \"client_email\": \"contact@globalresearch.edu\",\n  \"client_whatsapp_no\": \"+1-555-0123\",\n  \"client_ref_no\": \"GRI-2024-001\",\n  \"client_link\": \"https://www.globalresearch.edu\",\n  \"client_bank_account\": \"GRI-ACCOUNT-001\",\n  \"client_affiliation\": \"International Research University\",\n  \"clients_details\": \"Leading research institute specializing in AI and machine learning. Requires high-quality academic writing services for journal publications.\",\n  \"client_drive_link\": \"https://drive.google.com/drive/folders/global-research-client\",\n  \"payment_drive_link\": \"https://drive.google.com/drive/folders/global-research-payments\",\n\n  \"reference_id\": \"REF-GRI-2024-001\",\n  \"profile_name\": \"Academic Writing Profile - Dr. Smith\",\n  \"title\": \"Advanced Machine Learning Techniques for Medical Diagnosis\",\n  \"order_type\": \"writing\",\n  \"index\": \"SCI\",\n  \"rank\": \"Q1\",\n  \"journal_name\": \"Nature Machine Intelligence\",\n  \"write_start_date\": \"2024-01-15\",\n  \"profile_start_date\": \"2024-01-10\",\n  \"currency\": \"USD\",\n  \"payment_status\": \"pending\",\n\n  \"create_manuscript\": true,\n  \"manuscript_title\": \"Machine Learning Algorithms for Healthcare Applications\",\n  \"manuscript_journal_name\": \"Nature Machine Intelligence\",\n\n  \"create_payment\": true,\n  \"payment_amount\": 2500.00,\n  \"payment_phase\": 1,\n  \"payment_date\": \"2024-01-20\",\n  \"payment_received_account\": \"Primary Bank Account\"\n}"
+    }
+  },
+  {
+    "name": "Order Only for Existing Client",
+    "method": "POST",
+    "url": "http://localhost:8000/unified/create",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer YOUR_JWT_TOKEN_HERE",
+        "type": "text"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json",
+        "type": "text"
+      }
+    ],
+    "body": {
+      "mode": "raw",
+      "raw": "{\n  \"client_id\": \"CL-EXISTING-001\",\n  \"client_name\": \"Existing Client Name\",\n  \"reference_id\": \"REF-EXISTING-2024-002\",\n  \"profile_name\": \"Standard Academic Profile\",\n  \"title\": \"Data Analysis Methods in Social Sciences\",\n  \"order_type\": \"modification\",\n  \"index\": \"Scopus\",\n  \"rank\": \"Q2\",\n  \"journal_name\": \"Journal of Social Research\",\n  \"currency\": \"USD\",\n  \"payment_status\": \"pending\",\n  \"create_manuscript\": false,\n  \"create_payment\": false\n}"
+    }
+  },
+  {
+    "name": "Client + Order + Payment Only",
+    "method": "POST",
+    "url": "http://localhost:8000/unified/create",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer YOUR_JWT_TOKEN_HERE",
+        "type": "text"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json",
+        "type": "text"
+      }
+    ],
+    "body": {
+      "mode": "raw",
+      "raw": "{\n  \"client_id\": \"CL-NEW-002\",\n  \"client_name\": \"Tech Innovation Labs\",\n  \"client_country\": \"Canada\",\n  \"client_email\": \"info@techinnovation.ca\",\n  \"clients_details\": \"Technology research lab focusing on AI applications\",\n  \"payment_drive_link\": \"https://drive.google.com/drive/folders/tech-payments\",\n\n  \"reference_id\": \"REF-TIL-2024-001\",\n  \"profile_name\": \"Tech Research Profile\",\n  \"title\": \"AI Applications in Modern Technology\",\n  \"order_type\": \"writing\",\n  \"index\": \"SCI\",\n  \"rank\": \"Q1\",\n  \"journal_name\": \"IEEE Transactions on AI\",\n  \"currency\": \"CAD\",\n  \"payment_status\": \"partial\",\n\n  \"create_manuscript\": false,\n  \"create_payment\": true,\n  \"payment_amount\": 1800.00,\n  \"payment_phase\": 1,\n  \"payment_date\": \"2024-01-25\",\n  \"payment_received_account\": \"Corporate Account\"\n}"
+    }
+  }
+]
