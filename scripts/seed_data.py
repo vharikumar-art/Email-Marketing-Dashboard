@@ -152,6 +152,7 @@ def seed_orders(clients, manuscripts):
             "total_amount": total,
             "writing_amount": total * 0.6,
             "modification_amount": total * 0.2,
+            "implementation_amount": 0.0,
             "po_amount": total * 0.2,
             "payment_status": random.choice(["Pending", "Partial", "Paid"]),
             "remarks": "Priority Seeding Data",

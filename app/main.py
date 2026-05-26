@@ -38,8 +38,10 @@ from app.schemas import (
     PaymentHistoryItem,
     PendingSummaryResponse,
     PendingClientDetail,
-    ORDER_TYPE_OPTIONS
-
+    ORDER_TYPE_OPTIONS,
+    CurrencyConvertRequest,
+    ClientFullResponse,
+    ClientOrderSummary
 )
 import random
 import smtplib
@@ -77,7 +79,7 @@ from app.database import (
     settings_collection
 )
 
-from app.currency_converter import convert_inr_to_usd, convert_usd_to_inr, get_current_rate_info
+from app.currency_converter import convert_inr_to_usd, convert_usd_to_inr, get_current_rate_info, convert_currency
 from bson import ObjectId
 from bson.binary import Binary
 
@@ -418,6 +420,24 @@ def convert_usd_to_inr_endpoint(amount: dict):
             detail="Exchange rate service unavailable"
         )
     
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": "Conversion completed successfully",
+        "data": result
+    }
+
+@app.post("/currency/convert", response_model=ApiResponse[dict])
+def convert_currency_endpoint(request: CurrencyConvertRequest):
+    """
+    Convert amount between any supported currencies (USD, INR, CNY, AED, SAR).
+    """
+    result = convert_currency(request.amount, request.from_currency, request.to_currency)
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail="Currency conversion failed. Verify the input parameters."
+        )
     return {
         "status_code": 200,
         "status": "success",
@@ -888,6 +908,42 @@ def get_user_photo(email: str):
             return Response(content=f.read(), media_type="image/png")
     return Response(content=b"", status_code=404)
 
+@app.post("/users/{email}/photo", status_code=200)
+async def upload_user_photo(
+    email: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Upload or update a user's profile photo.
+    The authenticated user can update their own photo.
+    Admin and Manager can update any user's photo.
+    """
+    # Allow self-update OR manager/admin updating any user
+    if current_user["email"] != email and current_user.get("role") not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise HTTPException(status_code=403, detail="Not authorised to update this user's photo")
+    
+    target = users_collection.find_one({"email": email})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    content = await file.read()
+    if len(content) > 500 * 1024:  # 500 KB limit
+        raise HTTPException(status_code=400, detail="Image size must be less than 500 KB")
+
+    users_collection.update_one(
+        {"email": email},
+        {"$set": {
+            "photo_data": Binary(content),
+            "photo_mime": file.content_type,
+            "has_photo": True
+        }}
+    )
+    return {"status": "success", "message": f"Photo updated for {email}"}
+
 @app.post("/clients/{client_id}/photo", status_code=200)
 async def upload_client_photo(
     client_id: str,
@@ -992,8 +1048,20 @@ def get_user_dashboard_data(client_match: dict):
     Common logic to fetch dashboard stats, country stats, and order status details
     based on a client filter (e.g., all clients for Admin, or specific handler for Employee).
     """
-    from app.currency_converter import get_inr_to_usd_rate
-    rate = get_inr_to_usd_rate() or 0.012
+    from app.currency_converter import get_all_inr_rates
+    rates = get_all_inr_rates()
+    usd_rate = rates.get("USD", 0.012)
+    cny_rate = rates.get("CNY", 0.087)
+    aed_rate = rates.get("AED", 0.044)
+    sar_rate = rates.get("SAR", 0.045)
+    
+    multipliers = {
+        "USD": 1.0,
+        "INR": usd_rate,
+        "CNY": usd_rate / cny_rate if cny_rate else 0.14,
+        "AED": usd_rate / aed_rate if aed_rate else 0.272,
+        "SAR": usd_rate / sar_rate if sar_rate else 0.267,
+    }
 
     # 2. Aggregation Pipeline to fetch clients and their stats in ONE go
     pipeline = [
@@ -1015,11 +1083,15 @@ def get_user_dashboard_data(client_match: dict):
                     {
                         "$addFields": {
                             "order_total_usd": {
-                                "$cond": [
-                                    {"$eq": ["$currency", "INR"]},
-                                    {"$multiply": ["$total_amount", rate]},
-                                    "$total_amount"
-                                ]
+                                "$switch": {
+                                    "branches": [
+                                        {"case": {"$eq": [{"$toUpper": "$currency"}, "INR"]}, "then": {"$multiply": ["$total_amount", multipliers["INR"]]}},
+                                        {"case": {"$eq": [{"$toUpper": "$currency"}, "CNY"]}, "then": {"$multiply": ["$total_amount", multipliers["CNY"]]}},
+                                        {"case": {"$eq": [{"$toUpper": "$currency"}, "AED"]}, "then": {"$multiply": ["$total_amount", multipliers["AED"]]}},
+                                        {"case": {"$eq": [{"$toUpper": "$currency"}, "SAR"]}, "then": {"$multiply": ["$total_amount", multipliers["SAR"]]}}
+                                    ],
+                                    "default": "$total_amount"
+                                }
                             },
                             "order_paid": {
                                 "$sum": {
@@ -1027,11 +1099,15 @@ def get_user_dashboard_data(client_match: dict):
                                         "input": "$order_payments",
                                         "as": "p",
                                         "in": {
-                                            "$cond": [
-                                                {"$eq": ["$currency", "INR"]},
-                                                {"$multiply": [{"$ifNull": ["$$p.paid_amount", 0.0]}, rate]},
-                                                {"$ifNull": ["$$p.paid_amount", 0.0]}
-                                            ]
+                                            "$switch": {
+                                                "branches": [
+                                                    {"case": {"$eq": [{"$toUpper": "$currency"}, "INR"]}, "then": {"$multiply": [{"$ifNull": ["$$p.paid_amount", 0.0]}, multipliers["INR"]]}},
+                                                    {"case": {"$eq": [{"$toUpper": "$currency"}, "CNY"]}, "then": {"$multiply": [{"$ifNull": ["$$p.paid_amount", 0.0]}, multipliers["CNY"]]}},
+                                                    {"case": {"$eq": [{"$toUpper": "$currency"}, "AED"]}, "then": {"$multiply": [{"$ifNull": ["$$p.paid_amount", 0.0]}, multipliers["AED"]]}},
+                                                    {"case": {"$eq": [{"$toUpper": "$currency"}, "SAR"]}, "then": {"$multiply": [{"$ifNull": ["$$p.paid_amount", 0.0]}, multipliers["SAR"]]}}
+                                                ],
+                                                "default": {"$ifNull": ["$$p.paid_amount", 0.0]}
+                                            }
                                         }
                                     }
                                 }
@@ -1206,9 +1282,17 @@ def get_own_details(current_user: dict = Depends(get_current_user)):
     # 2. Fetch data using helper
     dashboard_data = get_user_dashboard_data(client_match)
     
-    # 3. Format user profile
+    # 3. Format user profile — strip raw binary before JSON serialisation
+    import base64
     user_data = format_mongo_id(current_user.copy())
     user_data["password"] = decrypt_password(user_data.get("password", ""))
+    raw_photo = user_data.pop("photo_data", None)
+    if raw_photo:
+        user_data["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
+        user_data["photo_mime"] = user_data.get("photo_mime", "image/png")
+    else:
+        user_data["photo_base64"] = None
+        user_data["photo_mime"] = None
     
     # 4. Merge dashboard data into user response
     user_data.update(dashboard_data)
@@ -1236,9 +1320,17 @@ def get_user_details(email: str, current_user: dict = Depends(require_manager_or
     # 2. Fetch data using helper
     dashboard_data = get_user_dashboard_data(client_match)
     
-    # 3. Format target user profile
+    # 3. Format target user profile — strip raw binary before JSON serialisation
+    import base64
     user_data = format_mongo_id(target_user)
     user_data["password"] = decrypt_password(user_data.get("password", ""))
+    raw_photo = user_data.pop("photo_data", None)
+    if raw_photo:
+        user_data["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
+        user_data["photo_mime"] = user_data.get("photo_mime", "image/png")
+    else:
+        user_data["photo_base64"] = None
+        user_data["photo_mime"] = None
     
     # 4. Merge dashboard data into user response
     user_data.update(dashboard_data)
@@ -1372,16 +1464,91 @@ def get_clients(current_user: dict = Depends(get_current_user)):
         "detail": detail
     }
 
-@app.get("/clients/{client_id}", response_model=ApiResponse[ClientResponse])
+@app.get("/clients/{client_id}", response_model=ApiResponse[ClientFullResponse])
 def get_client(client_id: str, current_user: dict = Depends(require_manager_or_higher)):
+    """
+    Fetch full client profile including:
+    - All client fields
+    - Full order list with payment phase details
+    - Client photo embedded as base64 (photo_base64 + photo_mime)
+    """
+    import base64
+
+    # --- 1. Fetch client ---
     client = clients_collection.find_one({"client_id": client_id})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+
+    # --- 2. Embed photo as base64 (strip raw binary before serialisation) ---
+    raw_photo = client.pop("photo_data", None)
+    if raw_photo:
+        client["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
+        client["photo_mime"] = client.get("photo_mime", "image/png")
+    else:
+        client["photo_base64"] = None
+        client["photo_mime"] = None
+
+    # --- 3. Fetch all orders for this client ---
+    raw_orders = list(orders_collection.find({"client_id": client_id}))
+    orders_out = []
+    for order in raw_orders:
+        order_id = order.get("order_id")
+
+        # Fetch the payment record linked to this order (if any)
+        payment = payments_collection.find_one({"order_id": order_id}) or {}
+
+        orders_out.append({
+            "order_id":                  order.get("order_id"),
+            "reference_id":              order.get("reference_id"),
+            "order_date":                order.get("order_date"),
+            "profile_name":              order.get("profile_name"),
+            "title":                     order.get("title"),
+            "journal_name":              order.get("journal_name"),
+            "order_type":                order.get("order_type"),
+            "index":                     order.get("index"),
+            "rank":                      order.get("rank"),
+            "currency":                  order.get("currency", "USD"),
+            "total_amount":              order.get("total_amount", 0.0),
+            "writing_amount":            order.get("writing_amount", 0.0),
+            "modification_amount":       order.get("modification_amount", 0.0),
+            "implementation_amount":     order.get("implementation_amount", 0.0),
+            "po_amount":                 order.get("po_amount", 0.0),
+            "paid_amount":               payment.get("paid_amount") or order.get("paid_amount", 0.0),
+            "payment_status":            order.get("payment_status", "Pending"),
+            "order_status":              order.get("order_status"),
+            "remarks":                   order.get("remarks"),
+            "clients_details":           order.get("clients_details"),
+            "client_drive_link":         order.get("client_drive_link"),
+            "payment_drive_link":        order.get("payment_drive_link"),
+            "writing_start_date":        order.get("writing_start_date"),
+            "writing_end_date":          order.get("writing_end_date"),
+            "modification_start_date":   order.get("modification_start_date"),
+            "modification_end_date":     order.get("modification_end_date"),
+            "po_start_date":             order.get("po_start_date"),
+            "po_end_date":               order.get("po_end_date"),
+            "is_new_order":              order.get("is_new_order"),
+            # Payment phases from the payment record
+            "phase_1_payment":           payment.get("phase_1_payment", 0.0),
+            "phase_1_payment_date":      payment.get("phase_1_payment_date"),
+            "phase_1_payment_details":   payment.get("phase_1_payment_details"),
+            "phase_2_payment":           payment.get("phase_2_payment", 0.0),
+            "phase_2_payment_date":      payment.get("phase_2_payment_date"),
+            "phase_2_payment_details":   payment.get("phase_2_payment_details"),
+            "phase_3_payment":           payment.get("phase_3_payment", 0.0),
+            "phase_3_payment_date":      payment.get("phase_3_payment_date"),
+            "phase_3_payment_details":   payment.get("phase_3_payment_details"),
+        })
+
+    client["orders"] = orders_out
+
+    # --- 4. Resolve handler name and format _id ---
+    client_data = resolve_client_handler(format_mongo_id(client))
+
     return {
         "status_code": 200,
         "status": "success",
         "message": "Client fetched successfully",
-        "data": resolve_client_handler(format_mongo_id(client))
+        "data": client_data
     }
 
 @app.post("/clients/assign", response_model=ApiResponse[ClientResponse])
@@ -1578,26 +1745,46 @@ def get_pending_payment_summary(current_user: dict = Depends(require_manager_or_
     Summary of pending payments across all clients and orders.
     Restricted to Manager and Admin.
     """
-    from app.currency_converter import get_inr_to_usd_rate
-    rate = get_inr_to_usd_rate() or 0.012
+    from app.currency_converter import get_all_inr_rates
+    rates = get_all_inr_rates()
+    usd_rate = rates.get("USD", 0.012)
+    cny_rate = rates.get("CNY", 0.087)
+    aed_rate = rates.get("AED", 0.044)
+    sar_rate = rates.get("SAR", 0.045)
+    
+    multipliers = {
+        "USD": 1.0,
+        "INR": usd_rate,
+        "CNY": usd_rate / cny_rate if cny_rate else 0.14,
+        "AED": usd_rate / aed_rate if aed_rate else 0.272,
+        "SAR": usd_rate / sar_rate if sar_rate else 0.267,
+    }
 
     pipeline = [
         {"$match": {"order_status": {"$ne": "Inactive"}}},
         {
             "$addFields": {
                 "total_usd": {
-                    "$cond": [
-                        {"$eq": ["$currency", "INR"]},
-                        {"$multiply": ["$total_amount", rate]},
-                        "$total_amount"
-                    ]
+                    "$switch": {
+                        "branches": [
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "INR"]}, "then": {"$multiply": ["$total_amount", multipliers["INR"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "CNY"]}, "then": {"$multiply": ["$total_amount", multipliers["CNY"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "AED"]}, "then": {"$multiply": ["$total_amount", multipliers["AED"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "SAR"]}, "then": {"$multiply": ["$total_amount", multipliers["SAR"]]}}
+                        ],
+                        "default": "$total_amount"
+                    }
                 },
                 "paid_usd": {
-                    "$cond": [
-                        {"$eq": ["$currency", "INR"]},
-                        {"$multiply": [{"$ifNull": ["$paid_amount", 0.0]}, rate]},
-                        {"$ifNull": ["$paid_amount", 0.0]}
-                    ]
+                    "$switch": {
+                        "branches": [
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "INR"]}, "then": {"$multiply": [{"$ifNull": ["$paid_amount", 0.0]}, multipliers["INR"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "CNY"]}, "then": {"$multiply": [{"$ifNull": ["$paid_amount", 0.0]}, multipliers["CNY"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "AED"]}, "then": {"$multiply": [{"$ifNull": ["$paid_amount", 0.0]}, multipliers["AED"]]}},
+                            {"case": {"$eq": [{"$toUpper": "$currency"}, "SAR"]}, "then": {"$multiply": [{"$ifNull": ["$paid_amount", 0.0]}, multipliers["SAR"]]}}
+                        ],
+                        "default": {"$ifNull": ["$paid_amount", 0.0]}
+                    }
                 }
             }
         },
@@ -1714,6 +1901,7 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
                 "total_amount": {"$ifNull": ["$order.total_amount", 0.0]},
                 "writing_amount": {"$ifNull": ["$order.writing_amount", 0.0]},
                 "modification_amount": {"$ifNull": ["$order.modification_amount", 0.0]},
+                "implementation_amount": {"$ifNull": ["$order.implementation_amount", 0.0]},
                 "po_amount": {"$ifNull": ["$order.po_amount", 0.0]},
                 "writing_start_date": "$order.writing_start_date",
                 "writing_end_date": "$order.writing_end_date",
@@ -1752,6 +1940,54 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
     
     # Resolve handler names for display in bulk
     resolve_client_handler_bulk(dashboard_data)
+
+    # Attach client photo as base64 for each row
+    import base64
+    client_ids = list({row["client_id"] for row in dashboard_data if row.get("client_id")})
+    photo_map = {}
+    for client_doc in clients_collection.find(
+        {"client_id": {"$in": client_ids}},
+        {"client_id": 1, "photo_data": 1, "photo_mime": 1}
+    ):
+        raw = client_doc.get("photo_data")
+        if raw:
+            photo_map[client_doc["client_id"]] = {
+                "photo_base64": base64.b64encode(bytes(raw)).decode("utf-8"),
+                "photo_mime":   client_doc.get("photo_mime", "image/png")
+            }
+        else:
+            photo_map[client_doc["client_id"]] = {"photo_base64": None, "photo_mime": None}
+
+    from app.currency_converter import get_all_inr_rates
+    rates = get_all_inr_rates()
+    usd_rate = rates.get("USD", 0.012)
+    cny_rate = rates.get("CNY", 0.087)
+    aed_rate = rates.get("AED", 0.044)
+    sar_rate = rates.get("SAR", 0.045)
+    
+    multipliers = {
+        "USD": 1.0,
+        "INR": usd_rate,
+        "CNY": usd_rate / cny_rate if cny_rate else 0.14,
+        "AED": usd_rate / aed_rate if aed_rate else 0.272,
+        "SAR": usd_rate / sar_rate if sar_rate else 0.267,
+    }
+
+    for row in dashboard_data:
+        info = photo_map.get(row.get("client_id"), {})
+        row["client_photo_base64"] = info.get("photo_base64")
+        row["client_photo_mime"]   = info.get("photo_mime")
+        
+        # Calculate USD equivalents dynamically
+        curr = (row.get("currency") or "USD").upper().strip()
+        multiplier = multipliers.get(curr, 1.0)
+        
+        raw_total = row.get("total_amount") or 0.0
+        raw_paid = row.get("paid_amount") or 0.0
+        
+        row["total_amount_usd"] = round(raw_total * multiplier, 2)
+        row["paid_amount_usd"] = round(raw_paid * multiplier, 2)
+
     
     return {
         "status_code": 200,
@@ -1778,7 +2014,7 @@ def update_dashboard_order(order_db_id: str, update_data: DashboardUpdate, curre
 
     # 2. Map fields to collections
     client_fields = ["client_id", "client_country", "client_Email", "client_whatsapp_number", "client_link", "bank_account", "client_affiliations"]
-    order_fields = ["manuscript_id", "order_date", "reference_id", "ref_no", "journal_name", "title", "order_type", "index", "rank", "currency", "total_amount", "writing_amount", "modification_amount", "po_amount", "writing_start_date", "writing_end_date", "modification_start_date", "modification_end_date", "po_start_date", "po_end_date", "payment_status", "remarks", "order_status", "payment_drive_link", "paid_amount", "clients_details", "client_details", "client_drive_link", "is_new_order"]
+    order_fields = ["manuscript_id", "order_date", "reference_id", "ref_no", "journal_name", "title", "order_type", "index", "rank", "currency", "total_amount", "writing_amount", "modification_amount", "implementation_amount", "po_amount", "writing_start_date", "writing_end_date", "modification_start_date", "modification_end_date", "po_start_date", "po_end_date", "payment_status", "remarks", "order_status", "payment_drive_link", "paid_amount", "clients_details", "client_details", "client_drive_link", "is_new_order"]
     payment_fields = ["phase_1_payment", "phase_1_payment_date", "phase_1_payment_details", "phase_2_payment", "phase_2_payment_date", "phase_2_payment_details", "phase_3_payment", "phase_3_payment_date", "phase_3_payment_details","payment_status", "paid_amount"]
 
     # Get the order to verify it exists and find linked client
@@ -2001,6 +2237,7 @@ def create_unified_record(request: UnifiedCreateRequest, current_user: dict = De
         "total_amount": request.total_amount or 0,
         "writing_amount": request.writing_amount or 0,
         "modification_amount": request.modification_amount or 0,
+        "implementation_amount": request.implementation_amount or 0,
         "po_amount": request.po_amount or 0,
         "writing_start_date": parse_date(request.writing_start_date) or parse_date(request.write_start_date),
         "writing_end_date": parse_date(request.writing_end_date),

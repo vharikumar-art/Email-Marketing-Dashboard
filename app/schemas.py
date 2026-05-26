@@ -136,6 +136,8 @@ class UserDetailResponse(UserResponse):
     order_status_details: list[OrderStatusDetail] = []
     country_split: dict[str, float] = {}
     dashboard_stats: Optional[DashboardStats] = None
+    photo_base64: Optional[str] = None   # base64-encoded user photo
+    photo_mime: Optional[str] = None     # MIME type of the photo
 
 class Token(BaseModel):
     access_token: str
@@ -206,6 +208,7 @@ class ClientDetailResponse(ClientBase):
     total_amount: float = 0.0
     writing_amount: float = 0.0
     modification_amount: float = 0.0
+    implementation_amount: float = 0.0
     po_amount: float = 0.0
     paid_amount: float = 0.0
     remaining_amount: float = 0.0
@@ -213,6 +216,60 @@ class ClientDetailResponse(ClientBase):
     order_status: Optional[str] = "Active"  
     client_handler_name: Optional[str] = None  # Resolved full name
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+
+class ClientOrderSummary(BaseModel):
+    """Lightweight order + payment summary embedded inside a client detail response."""
+    order_id: Optional[str] = None
+    reference_id: Optional[str] = None
+    order_date: Optional[datetime] = None
+    profile_name: Optional[str] = None
+    title: Optional[str] = None
+    journal_name: Optional[str] = None
+    order_type: Optional[str] = None
+    index: Optional[str] = None
+    rank: Optional[str] = None
+    currency: Optional[str] = "USD"
+    total_amount: float = 0.0
+    writing_amount: float = 0.0
+    modification_amount: float = 0.0
+    implementation_amount: float = 0.0
+    po_amount: float = 0.0
+    paid_amount: float = 0.0
+    payment_status: Optional[str] = "Pending"
+    order_status: Optional[str] = None
+    remarks: Optional[str] = None
+    clients_details: Optional[str] = None
+    client_drive_link: Optional[str] = None
+    payment_drive_link: Optional[str] = None
+    writing_start_date: Optional[datetime] = None
+    writing_end_date: Optional[datetime] = None
+    modification_start_date: Optional[datetime] = None
+    modification_end_date: Optional[datetime] = None
+    po_start_date: Optional[datetime] = None
+    po_end_date: Optional[datetime] = None
+    is_new_order: Optional[str] = None
+    phase_1_payment: Optional[float] = 0.0
+    phase_1_payment_date: Optional[datetime] = None
+    phase_1_payment_details: Optional[str] = None
+    phase_2_payment: Optional[float] = 0.0
+    phase_2_payment_date: Optional[datetime] = None
+    phase_2_payment_details: Optional[str] = None
+    phase_3_payment: Optional[float] = 0.0
+    phase_3_payment_date: Optional[datetime] = None
+    phase_3_payment_details: Optional[str] = None
+
+class ClientFullResponse(ClientBase):
+    """Full client profile: base info + orders + embedded photo as base64."""
+    id: str = Field(..., alias="_id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    client_handler_name: Optional[str] = None
+    order_id_db: Optional[list[str]] = None
+    photo_base64: Optional[str] = None   # base64-encoded photo, None if no photo
+    photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
+    orders: list[ClientOrderSummary] = []
 
     class Config:
         populate_by_name = True
@@ -252,10 +309,11 @@ class OrderBase(BaseModel):
     order_type: Optional[str] = None
     index: Optional[str] = None
     rank: Optional[str] = None
-    currency: str = "USD"
+    currency: str = "USD"  # USD | INR | CNY | AED | SAR
     total_amount: float = 0.0
     writing_amount: float = 0.0
     modification_amount: float = 0.0
+    implementation_amount: float = 0.0
     po_amount: float = 0.0
     writing_start_date: Optional[datetime] = None
     writing_end_date: Optional[datetime] = None
@@ -270,6 +328,15 @@ class OrderBase(BaseModel):
     client_drive_link: Optional[str] = None  # New field for client drive link
     payment_drive_link: Optional[str] = None  # New field - SOURCE for orders payment_drive_link
     is_new_order: str = "yes"
+    
+    @field_validator("currency")
+    @classmethod
+    def validate_currency_code(cls, v: str) -> str:
+        allowed = {"USD", "INR", "CNY", "AED", "SAR"}
+        val = v.upper().strip()
+        if val not in allowed:
+            raise ValueError(f"Currency must be one of {allowed}")
+        return val
     
 
 class OrderCreate(OrderBase):
@@ -335,6 +402,7 @@ class DashboardOrderResponse(BaseModel):
     total_amount: float = 0.0
     writing_amount: float = 0.0
     modification_amount: float = 0.0
+    implementation_amount: float = 0.0
     po_amount: float = 0.0
     writing_start_date: Optional[datetime] = None
     writing_end_date: Optional[datetime] = None
@@ -366,7 +434,12 @@ class DashboardOrderResponse(BaseModel):
     amount: Optional[float] = None
     order_status: Optional[str] = None
     paid_amount: Optional[float] = 0.0
+    total_amount_usd: float = 0.0
+    paid_amount_usd: float = 0.0
     is_new_order: Optional[str] = "yes"
+    client_photo_base64: Optional[str] = None  # client photo encoded as base64
+    client_photo_mime: Optional[str] = None    # MIME type e.g. image/jpeg
+
 
     @field_validator(
         "order_date", "writing_start_date", "writing_end_date", 
@@ -406,6 +479,7 @@ class DashboardUpdate(BaseModel):
     total_amount: Optional[float] = None
     writing_amount: Optional[float] = None
     modification_amount: Optional[float] = None
+    implementation_amount: Optional[float] = None
     po_amount: Optional[float] = None
     writing_start_date: Optional[datetime] = None
     writing_end_date: Optional[datetime] = None
@@ -420,6 +494,17 @@ class DashboardUpdate(BaseModel):
     client_details: Optional[str] = None  # Fallback for UI compatibility
     client_drive_link: Optional[str] = None
     is_new_order: Optional[str] = None
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        allowed = {"USD", "INR", "CNY", "AED", "SAR"}
+        val = v.upper().strip()
+        if val not in allowed:
+            raise ValueError(f"Currency must be one of {allowed}")
+        return val
 
     # PAYMENT FIELDS (Updates the first payment record for simplicity or we can expand)
     phase_1_payment: Optional[float] = None
@@ -471,19 +556,31 @@ class UnifiedCreateRequest(BaseModel):
     journal_name: Optional[str] = None
     write_start_date: Optional[str] = None
     profile_start_date: Optional[str] = None
-    currency: Optional[str] = "USD"  # USD | INR
+    currency: Optional[str] = "USD"  # USD | INR | CNY | AED | SAR
     payment_status: Optional[str] = "Pending"  # pending | partial | paid
     po_start_date: Optional[str] = None
     po_end_date: Optional[str] = None
     po_amount: Optional[float] = None
     writing_amount: Optional[float] = None
     modification_amount: Optional[float] = None
+    implementation_amount: Optional[float] = None
     total_amount: Optional[float] = None
     writing_start_date: Optional[str] = None
     writing_end_date: Optional[str] = None
     modification_start_date: Optional[str] = None
     modification_end_date: Optional[str] = None
     is_new_order: Optional[str] = "YES"
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency_code(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        allowed = {"USD", "INR", "CNY", "AED", "SAR"}
+        val = v.upper().strip()
+        if val not in allowed:
+            raise ValueError(f"Currency must be one of {allowed}")
+        return val
 
     # Optional manuscript fields
     create_manuscript: bool = False
@@ -557,3 +654,17 @@ class PendingSummaryResponse(BaseModel):
     pending_orders_count: int
     pending_clients_count: int
     top_pending_clients: list[PendingClientDetail]
+
+class CurrencyConvertRequest(BaseModel):
+    amount: float
+    from_currency: str
+    to_currency: str
+
+    @field_validator("from_currency", "to_currency")
+    @classmethod
+    def validate_currency_code(cls, v: str) -> str:
+        allowed = {"USD", "INR", "CNY", "AED", "SAR"}
+        val = v.upper().strip()
+        if val not in allowed:
+            raise ValueError(f"Currency must be one of {allowed}")
+        return val

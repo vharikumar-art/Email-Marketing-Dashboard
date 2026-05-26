@@ -180,6 +180,7 @@ def generate_orders(clients, manuscripts, user_ids):
             "total_amount": total,
             "writing_amount": writing,
             "modification_amount": mod,
+            "implementation_amount": 0.0,
             "po_amount": po,
             "writing_start_date": start_date,
             "writing_end_date": end_date,

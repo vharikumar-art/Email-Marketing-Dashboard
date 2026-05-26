@@ -16,15 +16,15 @@ class CacheManager:
             try:
                 self.redis_client = redis.from_url(REDIS_URL)
                 self.redis_client.ping()  # Test connection
-                print("✅ Redis cache enabled")
+                print("[Cache] Redis cache enabled")
             except Exception as e:
-                print(f"❌ Redis connection failed: {e}, falling back to memory cache")
+                print(f"[Cache] Redis connection failed: {e}, falling back to memory cache")
                 self.use_redis = False
 
         if not self.use_redis:
             # Fallback to in-memory cache
             self.memory_cache = TTLCache(maxsize=100, ttl=CACHE_TTL_SECONDS)
-            print("✅ Memory cache enabled")
+            print("[Cache] Memory cache enabled")
 
     def _make_key(self, *args) -> str:
         """Create a cache key from arguments"""
