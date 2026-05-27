@@ -52,7 +52,7 @@ class UserBase(BaseModel):
     id_range_end: Optional[int] = None
     has_photo: bool = False
     photo_base64: Optional[str] = None   # base64-encoded user photo
-    photo_mime: Optional[str] = None     # MIME type of the photo (e
+    photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
 
 
 class UserCreate(UserBase):
@@ -162,6 +162,31 @@ class OTPVerifyRequest(BaseModel):
     email: EmailStr
     otp: str
 
+# --- BANK ACCOUNTS SCHEMA ---
+
+class BankAccountBase(BaseModel):
+    account_number: str
+
+    @field_validator("account_number", mode="before")
+    @classmethod
+    def ensure_not_empty(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() == "":
+            raise ValueError("Bank account number cannot be empty")
+        return v
+
+class BankAccountCreate(BankAccountBase):
+    pass
+
+class BankAccountUpdate(BankAccountBase):
+    pass
+
+class BankAccountResponse(BankAccountBase):
+    id: str = Field(..., alias="_id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+
 # --- SCHEMA FROM ERD ---
 
 class ClientBase(BaseModel):
@@ -181,6 +206,8 @@ class ClientBase(BaseModel):
     client_handler: Optional[str] = None  # Stores employee EMAIL (unique reference)
     client_handler_name: Optional[str] = None  # Resolved full name for display (not stored in DB)
     has_photo: bool = False
+    photo_base64: Optional[str] = None   # base64-encoded photo, None if no photo
+    photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
 
     @field_validator("email", "whatsapp_no", "client_ref_no", "client_link", "bank_account", "affiliation", mode="before")
     @classmethod
@@ -270,6 +297,20 @@ class ClientOrderSummary(BaseModel):
     receipt_phase_3_base64: Optional[str] = None
     receipt_phase_3_mime: Optional[str] = None
 
+    @field_validator(
+        "order_date", "writing_start_date", "writing_end_date", 
+        "modification_start_date", "modification_end_date", 
+        "po_start_date", "po_end_date", 
+        "phase_1_payment_date", "phase_2_payment_date", "phase_3_payment_date", 
+        mode="before"
+    )
+    @classmethod
+    def empty_string_to_none(cls, v: Any) -> Any:
+        if v == "":
+            return None
+        return v
+
+
 class ClientFullResponse(ClientBase):
     """Full client profile: base info + orders + embedded photo as base64."""
     id: str = Field(..., alias="_id")
@@ -336,6 +377,7 @@ class OrderBase(BaseModel):
     clients_details: Optional[str] = None  # New field for detailed client information
     client_drive_link: Optional[str] = None  # New field for client drive link
     payment_drive_link: Optional[str] = None  # New field - SOURCE for orders payment_drive_link
+    receive_bank_account: Optional[str] = None
     is_new_order: str = "yes"
     
     # Receipt screenshot images (binary blobs stored in MongoDB, served as base64)
@@ -352,6 +394,18 @@ class OrderBase(BaseModel):
         if val not in allowed:
             raise ValueError(f"Currency must be one of {allowed}")
         return val
+    
+    @field_validator(
+        "order_date", "writing_start_date", "writing_end_date", 
+        "modification_start_date", "modification_end_date", 
+        "po_start_date", "po_end_date", 
+        mode="before"
+    )
+    @classmethod
+    def empty_string_to_none(cls, v: Any) -> Any:
+        if v == "":
+            return None
+        return v
     
 
 class OrderCreate(OrderBase):
@@ -385,6 +439,17 @@ class PaymentBase(BaseModel):
     phase_3_payment_details: Optional[str] = None
     status: str = "Pending"
     paid_amount: Optional[float] = 0.0
+
+    @field_validator(
+        "payment_date", "phase_1_payment_date", 
+        "phase_2_payment_date", "phase_3_payment_date", 
+        mode="before"
+    )
+    @classmethod
+    def empty_string_to_none(cls, v: Any) -> Any:
+        if v == "":
+            return None
+        return v
 
 
 class PaymentCreate(PaymentBase):
@@ -441,6 +506,9 @@ class DashboardOrderResponse(BaseModel):
     client_affiliations: Optional[str] = None
     client_handler: Optional[str] = None
     client_handler_name: Optional[str] = None
+    client_handler_phone_number: Optional[str] = None
+    profile_name: Optional[str] = None
+    receive_bank_account: Optional[str] = None
     remarks: Optional[str] = None
     client_drive_link: Optional[str] = None
     payment_drive_link: Optional[str] = None
@@ -515,6 +583,7 @@ class DashboardUpdate(BaseModel):
     clients_details: Optional[str] = None
     client_details: Optional[str] = None  # Fallback for UI compatibility
     client_drive_link: Optional[str] = None
+    receive_bank_account: Optional[str] = None
     is_new_order: Optional[str] = None
 
     @field_validator("currency")
@@ -561,6 +630,7 @@ class UnifiedCreateRequest(BaseModel):
     bank_account: Optional[str] = None
     
     # Order fields
+    receive_bank_account: Optional[str] = None
     client_order_type: Optional[str] = None  # For client
     clients_details: Optional[str] = None  # New field for detailed client information
     client_details: Optional[str] = None  # Fallback for UI compatibility
@@ -623,7 +693,7 @@ class UnifiedCreateRequest(BaseModel):
         "order_date", "journal_name", "title", "order_type", "index", "rank",
         "write_start_date", "profile_start_date", "writing_start_date", "writing_end_date",
         "modification_start_date", "modification_end_date", "po_start_date", "po_end_date",
-        "payment_date", "payment_received_account", "client_id", "reference_id", "client_order_type",
+        "payment_date", "payment_received_account", "client_id", "reference_id", "client_order_type", "receive_bank_account",
         mode="before"
     )
     @classmethod

@@ -41,7 +41,10 @@ from app.schemas import (
     ORDER_TYPE_OPTIONS,
     CurrencyConvertRequest,
     ClientFullResponse,
-    ClientOrderSummary
+    ClientOrderSummary,
+    BankAccountCreate,
+    BankAccountUpdate,
+    BankAccountResponse
 )
 import random
 import smtplib
@@ -76,7 +79,8 @@ from app.database import (
     payments_collection, 
     payment_history_collection,
     otps_collection,
-    settings_collection
+    settings_collection,
+    bank_accounts_collection
 )
 
 from app.currency_converter import convert_inr_to_usd, convert_usd_to_inr, get_current_rate_info, convert_currency
@@ -235,14 +239,16 @@ def resolve_client_handler_bulk(clients: list[dict]) -> list[dict]:
             client["client_handler_name"] = None
         return clients
 
-    handlers = users_collection.find({"email": {"$in": list(emails)}}, {"email": 1, "full_name": 1})
-    email_to_name = {handler["email"]: handler.get("full_name") for handler in handlers}
+    handlers = users_collection.find({"email": {"$in": list(emails)}}, {"email": 1, "full_name": 1, "phone_number": 1})
+    email_to_handler = {handler["email"]: handler for handler in handlers}
     for client in clients:
         handler_email = client.get("client_handler")
-        if handler_email:
-            client["client_handler_name"] = email_to_name.get(handler_email, handler_email)
+        if handler_email and handler_email in email_to_handler:
+            client["client_handler_name"] = email_to_handler[handler_email].get("full_name", handler_email)
+            client["client_handler_phone_number"] = email_to_handler[handler_email].get("phone_number")
         else:
             client["client_handler_name"] = None
+            client["client_handler_phone_number"] = None
     return clients
 
 def get_user_email_by_name(name_or_email: str) -> str:
@@ -1997,6 +2003,85 @@ def get_pending_payment_summary(current_user: dict = Depends(require_manager_or_
         }
     }
 
+# --- BANK ACCOUNTS ---
+
+@app.get("/bank-accounts", response_model=ApiResponse[list[BankAccountResponse]])
+def get_bank_accounts(current_user: dict = Depends(get_current_user)):
+    """Get all bank accounts."""
+    accounts = list(bank_accounts_collection.find())
+    for acc in accounts:
+        acc["_id"] = str(acc["_id"])
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": "Bank accounts fetched successfully",
+        "data": accounts
+    }
+
+@app.post("/bank-accounts", response_model=ApiResponse[BankAccountResponse])
+def create_bank_account(data: BankAccountCreate, current_user: dict = Depends(require_manager_or_higher)):
+    """Create a new bank account."""
+    if bank_accounts_collection.find_one({"account_number": data.account_number}):
+        raise HTTPException(status_code=400, detail="Bank account already exists")
+    
+    acc_dict = data.model_dump()
+    acc_dict["created_at"] = datetime.utcnow()
+    result = bank_accounts_collection.insert_one(acc_dict)
+    
+    acc_dict["_id"] = str(result.inserted_id)
+    return {
+        "status_code": 201,
+        "status": "success",
+        "message": "Bank account created successfully",
+        "data": acc_dict
+    }
+
+@app.put("/bank-accounts/{account_id}", response_model=ApiResponse[BankAccountResponse])
+def update_bank_account(account_id: str, data: BankAccountUpdate, current_user: dict = Depends(require_manager_or_higher)):
+    """Update a bank account."""
+    if not ObjectId.is_valid(account_id):
+        raise HTTPException(status_code=400, detail="Invalid bank account ID")
+        
+    existing = bank_accounts_collection.find_one({"_id": ObjectId(account_id)})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Bank account not found")
+        
+    # Check if new number already exists
+    if existing["account_number"] != data.account_number:
+        if bank_accounts_collection.find_one({"account_number": data.account_number}):
+            raise HTTPException(status_code=400, detail="Bank account number already exists")
+            
+    bank_accounts_collection.update_one(
+        {"_id": ObjectId(account_id)},
+        {"$set": {"account_number": data.account_number}}
+    )
+    
+    updated = bank_accounts_collection.find_one({"_id": ObjectId(account_id)})
+    updated["_id"] = str(updated["_id"])
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": "Bank account updated successfully",
+        "data": updated
+    }
+
+@app.delete("/bank-accounts/{account_id}", response_model=ApiResponse[dict])
+def delete_bank_account(account_id: str, current_user: dict = Depends(require_manager_or_higher)):
+    """Delete a bank account."""
+    if not ObjectId.is_valid(account_id):
+        raise HTTPException(status_code=400, detail="Invalid bank account ID")
+        
+    result = bank_accounts_collection.delete_one({"_id": ObjectId(account_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Bank account not found")
+        
+    return {
+        "status_code": 200,
+        "status": "success",
+        "message": "Bank account deleted successfully",
+        "data": None
+    }
+
 # --- DASHBOARD ---
 
 @app.get("/dashboard/orders", response_model=ApiResponse[list[DashboardOrderResponse]])
@@ -2080,8 +2165,10 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
                 "paid_amount": {"$ifNull": ["$order.paid_amount", 0.0]},
                 "client_link": "$client_link",
                 "bank_account": "$bank_account",
+                "receive_bank_account": "$order.receive_bank_account",
                 "client_affiliations": "$affiliation",
                 "client_handler": "$client_handler",
+                "profile_name": "$order.profile_name",
                 "remarks": "$order.remarks",
                 "order_status": "$order.order_status",
                 "clients_details": "$order.clients_details",
@@ -2461,6 +2548,7 @@ def create_unified_record(request: UnifiedCreateRequest, current_user: dict = De
         "payment_drive_link": request.payment_drive_link or client_payment_drive_link,
         "clients_details": request.clients_details or getattr(request, 'client_details', None),
         "client_drive_link": request.client_drive_link,
+        "receive_bank_account": request.receive_bank_account,
         "is_new_order": request.is_new_order or "yes",
         "remarks": None,
         "created_at": datetime.utcnow(),

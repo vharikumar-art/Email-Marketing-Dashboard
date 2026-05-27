@@ -855,6 +855,7 @@ curl -X PATCH http://localhost:8000/dashboard/orders/65f1a2b3c4d5e6f7a8b9c0d1 \
   "writing_amount": 5000.00,
   "modification_amount": 2000.00,
   "payment_status": "Pending",
+  "receive_bank_account": "1234567890",
   "create_manuscript": true,
   "manuscript_title": "ML Research Dataset",
   "create_payment": true,
@@ -883,7 +884,53 @@ curl -X POST http://localhost:8000/unified/create \
 
 ---
 
-# 8. POSTMAN COLLECTION QUICK START
+# 8. BANK ACCOUNTS
+
+## 8.1 Get All Bank Accounts
+**Endpoint:** `GET /bank-accounts`
+
+**Purpose:** Fetch all bank accounts for the frontend dropdown options.
+
+**Auth Required:** Yes (Any role)
+
+## 8.2 Create Bank Account
+**Endpoint:** `POST /bank-accounts`
+
+**Purpose:** Create a new bank account number.
+
+**Auth Required:** Admin or Manager
+
+**Request:**
+```json
+{
+  "account_number": "1234567890"
+}
+```
+
+## 8.3 Update Bank Account
+**Endpoint:** `PUT /bank-accounts/{account_id}`
+
+**Purpose:** Update an existing bank account number.
+
+**Auth Required:** Admin or Manager
+
+**Request:**
+```json
+{
+  "account_number": "0987654321"
+}
+```
+
+## 8.4 Delete Bank Account
+**Endpoint:** `DELETE /bank-accounts/{account_id}`
+
+**Purpose:** Delete a bank account number.
+
+**Auth Required:** Admin or Manager
+
+---
+
+# 9. POSTMAN COLLECTION QUICK START
 
 ## Import Postman Environment Variables
 
@@ -925,7 +972,7 @@ curl -X POST http://localhost:8000/unified/create \
 
 ---
 
-# 9. COMMON ERRORS & SOLUTIONS
+# 10. COMMON ERRORS & SOLUTIONS
 
 | Error | Cause | Solution |
 | :--- | :--- | :--- |
@@ -938,7 +985,7 @@ curl -X POST http://localhost:8000/unified/create \
 
 ---
 
-# 10. RATE LIMITS & BEST PRACTICES
+# 11. RATE LIMITS & BEST PRACTICES
 
 - **No strict rate limiting** but avoid >100 requests/sec
 - **Batch operations** when possible (use `/dashboard/orders` instead of individual queries)
@@ -948,7 +995,7 @@ curl -X POST http://localhost:8000/unified/create \
 
 ---
 
-# 11. TESTING CHECKLIST
+# 12. TESTING CHECKLIST
 
 - [ ] Login and get auth token
 - [ ] Create a test user with photo upload
