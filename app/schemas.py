@@ -51,6 +51,8 @@ class UserBase(BaseModel):
     id_range_start: Optional[int] = None
     id_range_end: Optional[int] = None
     has_photo: bool = False
+    photo_base64: Optional[str] = None   # base64-encoded user photo
+    photo_mime: Optional[str] = None     # MIME type of the photo (e
 
 
 class UserCreate(UserBase):
@@ -260,6 +262,13 @@ class ClientOrderSummary(BaseModel):
     phase_3_payment: Optional[float] = 0.0
     phase_3_payment_date: Optional[datetime] = None
     phase_3_payment_details: Optional[str] = None
+    # Receipt screenshot images (base64 encoded, one per phase)
+    receipt_phase_1_base64: Optional[str] = None
+    receipt_phase_1_mime: Optional[str] = None
+    receipt_phase_2_base64: Optional[str] = None
+    receipt_phase_2_mime: Optional[str] = None
+    receipt_phase_3_base64: Optional[str] = None
+    receipt_phase_3_mime: Optional[str] = None
 
 class ClientFullResponse(ClientBase):
     """Full client profile: base info + orders + embedded photo as base64."""
@@ -328,6 +337,12 @@ class OrderBase(BaseModel):
     client_drive_link: Optional[str] = None  # New field for client drive link
     payment_drive_link: Optional[str] = None  # New field - SOURCE for orders payment_drive_link
     is_new_order: str = "yes"
+    
+    # Receipt screenshot images (binary blobs stored in MongoDB, served as base64)
+    # MIME types only (raw data never in schema)
+    receipt_phase_1_mime: Optional[str] = None
+    receipt_phase_2_mime: Optional[str] = None
+    receipt_phase_3_mime: Optional[str] = None
     
     @field_validator("currency")
     @classmethod
@@ -439,6 +454,13 @@ class DashboardOrderResponse(BaseModel):
     is_new_order: Optional[str] = "yes"
     client_photo_base64: Optional[str] = None  # client photo encoded as base64
     client_photo_mime: Optional[str] = None    # MIME type e.g. image/jpeg
+    # Receipt screenshot images (base64 encoded, one per phase)
+    receipt_phase_1_base64: Optional[str] = None
+    receipt_phase_1_mime: Optional[str] = None
+    receipt_phase_2_base64: Optional[str] = None
+    receipt_phase_2_mime: Optional[str] = None
+    receipt_phase_3_base64: Optional[str] = None
+    receipt_phase_3_mime: Optional[str] = None
 
 
     @field_validator(

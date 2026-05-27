@@ -762,11 +762,20 @@ def get_all_users(current_user: dict = Depends(require_manager_or_higher)):
     """
     Get all regular Users. Accessible to Admin and Super Admin.
     """
+    import base64
+
     users = list(users_collection.find({"role": UserRole.EMPLOYEE}))
     for u in users:
         u["_id"] = str(u["_id"])
         # Decrypt password for display
-        u["password"] = decrypt_password(u.get("password", "")) 
+        u["password"] = decrypt_password(u.get("password", ""))
+        raw_photo = u.pop("photo_data", None)
+        if raw_photo:
+            u["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
+            u["photo_mime"] = u.get("photo_mime", "image/png")
+        else:
+            u["photo_base64"] = None
+            u["photo_mime"] = None
     return {
         "status_code": 200,
         "status": "success",
@@ -779,11 +788,20 @@ def get_all_admins(current_user: dict = Depends(require_admin)):
     """
     Get all Admins and Super Admins. Accessible to Super Admin only.
     """
+    import base64
+
     admins = list(users_collection.find({"role": {"$in": [UserRole.MANAGER, UserRole.ADMIN]}}))
     for a in admins:
         a["_id"] = str(a["_id"])
         # Decrypt password for display
         a["password"] = decrypt_password(a.get("password", ""))
+        raw_photo = a.pop("photo_data", None)
+        if raw_photo:
+            a["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
+            a["photo_mime"] = a.get("photo_mime", "image/png")
+        else:
+            a["photo_base64"] = None
+            a["photo_mime"] = None
     return {
         "status_code": 200,
         "status": "success",
@@ -978,6 +996,129 @@ def get_client_photo(client_id: str):
         with open(default_path, "rb") as f:
             return Response(content=f.read(), media_type="image/png")
     return Response(content=b"", status_code=404)
+
+# --- RECEIPT SCREENSHOT ENDPOINTS ---
+
+@app.post("/orders/{order_db_id}/receipt/{phase}", status_code=200)
+async def upload_receipt_screenshot(
+    order_db_id: str,
+    phase: int,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_manager_or_higher)
+):
+    """
+    Upload a payment receipt screenshot for an order phase (1, 2, or 3).
+    - Validates image MIME type, enforces 2 MB size limit
+    - Stores as Binary blob + MIME type in orders collection
+    - Clears dashboard cache after successful upload
+    """
+    from app.cache import clear_dashboard_cache
+    
+    # Validate phase
+    if phase not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Phase must be 1, 2, or 3")
+    
+    # Validate image
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:  # 2MB limit
+        raise HTTPException(status_code=400, detail="Image size must be less than 2MB")
+    
+    # Verify order exists
+    try:
+        order = orders_collection.find_one({"_id": ObjectId(order_db_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid order_db_id format")
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Store receipt
+    orders_collection.update_one(
+        {"_id": ObjectId(order_db_id)},
+        {"$set": {
+            f"receipt_phase_{phase}_data": Binary(content),
+            f"receipt_phase_{phase}_mime": file.content_type
+        }}
+    )
+    
+    # Clear cache
+    clear_dashboard_cache()
+    
+    return {
+        "status": "success",
+        "message": f"Receipt screenshot for phase {phase} uploaded successfully"
+    }
+
+@app.get("/orders/{order_db_id}/receipt/{phase}")
+def get_receipt_screenshot(order_db_id: str, phase: int):
+    """
+    Download/serve a payment receipt screenshot for an order phase.
+    Returns binary image with appropriate MIME type, or 404 if not found.
+    """
+    # Validate phase
+    if phase not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Phase must be 1, 2, or 3")
+    
+    try:
+        order = orders_collection.find_one({"_id": ObjectId(order_db_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid order_db_id format")
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    receipt_data = order.get(f"receipt_phase_{phase}_data")
+    if not receipt_data:
+        raise HTTPException(status_code=404, detail=f"No receipt found for phase {phase}")
+    
+    receipt_mime = order.get(f"receipt_phase_{phase}_mime", "image/png")
+    return Response(content=receipt_data, media_type=receipt_mime)
+
+@app.delete("/orders/{order_db_id}/receipt/{phase}", status_code=200)
+def delete_receipt_screenshot(
+    order_db_id: str,
+    phase: int,
+    current_user: dict = Depends(require_manager_or_higher)
+):
+    """
+    Delete a payment receipt screenshot from an order phase.
+    Removes both the binary data and MIME type fields.
+    """
+    from app.cache import clear_dashboard_cache
+    
+    # Validate phase
+    if phase not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Phase must be 1, 2, or 3")
+    
+    # Verify order exists
+    try:
+        order = orders_collection.find_one({"_id": ObjectId(order_db_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid order_db_id format")
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Delete receipt
+    orders_collection.update_one(
+        {"_id": ObjectId(order_db_id)},
+        {"$unset": {
+            f"receipt_phase_{phase}_data": "",
+            f"receipt_phase_{phase}_mime": ""
+        }}
+    )
+    
+    # Clear cache
+    clear_dashboard_cache()
+    
+    return {
+        "status": "success",
+        "message": f"Receipt screenshot for phase {phase} deleted successfully"
+    }
+
 
 
 @app.post("/users/profiles/append", response_model=ApiResponse[dict])
@@ -1497,7 +1638,8 @@ def get_client(client_id: str, current_user: dict = Depends(require_manager_or_h
         # Fetch the payment record linked to this order (if any)
         payment = payments_collection.find_one({"order_id": order_id}) or {}
 
-        orders_out.append({
+        # Build order dict with all standard fields
+        order_dict = {
             "order_id":                  order.get("order_id"),
             "reference_id":              order.get("reference_id"),
             "order_date":                order.get("order_date"),
@@ -1537,7 +1679,21 @@ def get_client(client_id: str, current_user: dict = Depends(require_manager_or_h
             "phase_3_payment":           payment.get("phase_3_payment", 0.0),
             "phase_3_payment_date":      payment.get("phase_3_payment_date"),
             "phase_3_payment_details":   payment.get("phase_3_payment_details"),
-        })
+        }
+        
+        # Inject receipt screenshots for each phase (encoded as base64)
+        for phase in (1, 2, 3):
+            receipt_data = order.get(f"receipt_phase_{phase}_data")
+            receipt_mime = order.get(f"receipt_phase_{phase}_mime", "image/png")
+            
+            if receipt_data:
+                order_dict[f"receipt_phase_{phase}_base64"] = base64.b64encode(bytes(receipt_data)).decode("utf-8")
+                order_dict[f"receipt_phase_{phase}_mime"] = receipt_mime
+            else:
+                order_dict[f"receipt_phase_{phase}_base64"] = None
+                order_dict[f"receipt_phase_{phase}_mime"] = None
+        
+        orders_out.append(order_dict)
 
     client["orders"] = orders_out
 
@@ -1958,6 +2114,48 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
         else:
             photo_map[client_doc["client_id"]] = {"photo_base64": None, "photo_mime": None}
 
+    # Attach receipt screenshots as base64 for each row
+    # Collect all order_db_ids that have receipts
+    order_db_ids = list({row["order_db_id"] for row in dashboard_data if row.get("order_db_id")})
+    receipt_map = {}  # Maps order_db_id -> {phase -> {base64, mime}}
+    
+    if order_db_ids:
+        # Convert string IDs back to ObjectId for querying
+        order_object_ids = []
+        for oid_str in order_db_ids:
+            try:
+                order_object_ids.append(ObjectId(oid_str))
+            except:
+                pass
+        
+        # Query orders for receipt fields
+        for order_doc in orders_collection.find(
+            {"_id": {"$in": order_object_ids}},
+            {
+                "_id": 1,
+                "receipt_phase_1_data": 1, "receipt_phase_1_mime": 1,
+                "receipt_phase_2_data": 1, "receipt_phase_2_mime": 1,
+                "receipt_phase_3_data": 1, "receipt_phase_3_mime": 1
+            }
+        ):
+            order_id_str = str(order_doc["_id"])
+            receipt_map[order_id_str] = {}
+            
+            for phase in (1, 2, 3):
+                receipt_data = order_doc.get(f"receipt_phase_{phase}_data")
+                receipt_mime = order_doc.get(f"receipt_phase_{phase}_mime", "image/png")
+                
+                if receipt_data:
+                    receipt_map[order_id_str][phase] = {
+                        "base64": base64.b64encode(bytes(receipt_data)).decode("utf-8"),
+                        "mime": receipt_mime
+                    }
+                else:
+                    receipt_map[order_id_str][phase] = {
+                        "base64": None,
+                        "mime": None
+                    }
+
     from app.currency_converter import get_all_inr_rates
     rates = get_all_inr_rates()
     usd_rate = rates.get("USD", 0.012)
@@ -1977,6 +2175,19 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
         info = photo_map.get(row.get("client_id"), {})
         row["client_photo_base64"] = info.get("photo_base64")
         row["client_photo_mime"]   = info.get("photo_mime")
+        
+        # Inject receipt screenshots for this order
+        order_id_str = row.get("order_db_id")
+        if order_id_str and order_id_str in receipt_map:
+            for phase in (1, 2, 3):
+                phase_receipt = receipt_map[order_id_str].get(phase, {})
+                row[f"receipt_phase_{phase}_base64"] = phase_receipt.get("base64")
+                row[f"receipt_phase_{phase}_mime"] = phase_receipt.get("mime")
+        else:
+            # No receipts for this order
+            for phase in (1, 2, 3):
+                row[f"receipt_phase_{phase}_base64"] = None
+                row[f"receipt_phase_{phase}_mime"] = None
         
         # Calculate USD equivalents dynamically
         curr = (row.get("currency") or "USD").upper().strip()
