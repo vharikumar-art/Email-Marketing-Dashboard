@@ -83,17 +83,18 @@ The system serves as a centralized platform for:
 │ - Authorization     │
 │ - Cache Manager     │
 │ - Business Logic    │
+│ - StaticFiles Mount │ ← /static/uploads/
 └──────────┬──────────┘
-           ├──────────────────────────┐
-           │ TCP Connection           │ Cache Lookups
-           ▼                          ▼
-┌─────────────────────┐    ┌─────────────────────┐
-│     MongoDB         │    │     Redis / Memory  │
-├─────────────────────┤    ├─────────────────────┤
-│ - users             │    │ - Dashboard cache   │
-│ - clients           │    │ - User cache        │
-│ - orders            │    └─────────────────────┘
-│ - payments          │
+           ├──────────────────────────┬──────────────────────┐
+           │ TCP Connection           │ Cache Lookups        │ Local Disk
+           ▼                          ▼                       ▼
+┌─────────────────────┐    ┌─────────────────────┐  ┌─────────────────────┐
+│     MongoDB         │    │     Redis / Memory  │  │  static/uploads/    │
+├─────────────────────┤    ├─────────────────────┤  ├─────────────────────┤
+│ - users             │    │ - Dashboard cache   │  │ - users/  (photos)  │
+│ - clients           │    │ - User cache        │  │ - clients/(photos)  │
+│ - orders            │    └─────────────────────┘  │ - receipts/(imgs)   │
+│ - payments          │                              └─────────────────────┘
 │ - manuscripts       │
 │ - payment_history   │
 │ - tokens            │
@@ -137,6 +138,14 @@ Email Dashboard/
 │   ├── cache.py                     # Caching layer (Redis / TTLCache)
 │   └── currency_converter.py        # INR ↔ USD live exchange rate converter
 │
+├── static/                          # Static Assets & Uploaded Files
+│   ├── default_user.png             # Fallback user profile photo
+│   ├── default_client.png           # Fallback client photo
+│   └── uploads/                     # ← Runtime image uploads (auto-created)
+│       ├── users/                   # User profile photos (UUID-named files)
+│       ├── clients/                 # Client photos (UUID-named files)
+│       └── receipts/                # Payment receipt screenshots (UUID-named files)
+│
 ├── docs/                            # Project Documentation
 │   ├── PROJECT_ARCHITECTURE.md      # This file
 │   ├── DATABASE_DOCUMENTATION.md    # Database schemas
@@ -151,10 +160,7 @@ Email Dashboard/
 │   ├── consolidate_payment_history.py # Syncs historical payments to history
 │   └── migration_add_new_fields.py  # Migrates database schema to support new fields
 │
-├── static/                          # Static Assets
-│   ├── default_user.png             # Fallback user profile photo
-│   └── default_client.png           # Fallback client photo
-│
+├── migrate_images.py                # One-time migration: MongoDB blobs → filesystem
 ├── .env                             # Environment variables configuration
 ├── requirements.txt                 # Project dependencies
 ├── pyproject.toml                   # Project metadata & requirements
@@ -193,7 +199,7 @@ The database contains **8 collections** optimized with indexes for query speeds 
 ### Collection Schemas & Fields
 
 #### 1. **users**
-Stores account data. Passwords are encrypted using two-way Fernet encryption, allowing administrative retrieval.
+Stores account data. Passwords are encrypted using two-way Fernet encryption, allowing administrative retrieval. Profile photos are stored on the server filesystem; only the relative path is stored in MongoDB.
 ```javascript
 {
   "_id": ObjectId("..."),
@@ -212,14 +218,14 @@ Stores account data. Passwords are encrypted using two-way Fernet encryption, al
   "id_range_start": 100,                    // Auto-generated ID range start
   "id_range_end": 200,                      // Auto-generated ID range end
   "has_photo": true,
-  "photo_data": Binary("..."),              // Avatar image (max 500KB)
-  "photo_mime": "image/png"
+  "photo_path": "static/uploads/users/a1b2c3d4e5f6.jpg",  // Relative path on disk
+  "photo_mime": "image/png"                 // MIME type for Content-Type header
 }
 ```
 **Indexes**: `email` (unique), `full_name`, `role`
 
 #### 2. **clients**
-Stores client credentials, affiliations, and handler associations.
+Stores client credentials, affiliations, and handler associations. Client photos are stored on the server filesystem; only the relative path is stored in MongoDB.
 ```javascript
 {
   "_id": ObjectId("..."),
@@ -238,8 +244,8 @@ Stores client credentials, affiliations, and handler associations.
   "payment_drive_link": "https://drive...", // Proof of payment link
   "created_at": ISODate("2026-05-20T11:00:00Z"),
   "has_photo": false,
-  "photo_data": Binary("..."),
-  "photo_mime": "image/jpeg"
+  "photo_path": "static/uploads/clients/b1c2d3e4f5a6.jpg",  // Relative path on disk
+  "photo_mime": "image/jpeg"               // MIME type for Content-Type header
 }
 ```
 **Indexes**: `client_id` (unique), `client_handler`
@@ -281,7 +287,14 @@ Represents assignments. It contains detailed pricing components, timeline marker
   "is_new_order": "yes",
   "remarks": null,
   "created_at": ISODate("2026-05-20T11:00:00Z"),
-  "updated_at": ISODate("2026-05-20T11:00:00Z")
+  "updated_at": ISODate("2026-05-20T11:00:00Z"),
+  // Receipt screenshot files (stored on disk; relative paths saved here)
+  "receipt_phase_1_path": "static/uploads/receipts/c1d2e3.jpg",
+  "receipt_phase_1_mime": "image/jpeg",
+  "receipt_phase_2_path": null,
+  "receipt_phase_2_mime": null,
+  "receipt_phase_3_path": null,
+  "receipt_phase_3_mime": null
 }
 ```
 **Indexes**: `order_id` (unique), `client_id`, `reference_id`, `s_no`, `order_date`, compound index on `(client_id, order_id)`
@@ -459,6 +472,14 @@ To prevent collision of custom identifiers across distributed entries, the appli
 - **Purpose**: Invalidate JWT token.
 - **Headers**: Authorization Bearer Token.
 
+#### `GET /otp-status`
+- **Purpose**: Retrieve the current status (enabled/disabled) of the global OTP requirement.
+- **Auth Required**: Admin or Manager
+
+#### `POST /toggle-otp`
+- **Purpose**: Enable or disable the OTP requirement globally for Admins and Managers.
+- **Auth Required**: Admin only
+
 ---
 
 ### User & Permission Management
@@ -484,25 +505,34 @@ To prevent collision of custom identifiers across distributed entries, the appli
 #### `PUT /users/password`
 - **Purpose**: Reset another user's password. Managers can only update Employees; Admins can update any user (except other Admins).
 
+#### `GET /users/me/details`
+- **Purpose**: Retrieve full details of the currently authenticated user, including nested statistics (dashboard stats, country split, order status details) and photo URL.
+
+#### `GET /users/{email}/details`
+- **Purpose**: Retrieve full details of a specific user. Manager+ permissions required. Includes `photo_url` field pointing to the user's photo on disk.
+
 ---
 
 ### Profile Customization & Photo Uploads
 
 #### `PUT /users/profile` / `PUT /users/{email}/profile`
-- **Purpose**: Update contact details (personal email, personal phone, branch) and upload a profile photo (max 500KB).
+- **Purpose**: Update contact details (personal email, personal phone, branch) and upload a profile photo (max 500KB). Photo is saved to `static/uploads/users/` on disk.
 - **Request Type**: `multipart/form-data`.
+- **Response**: Includes `photo_url` with the relative path to the saved file.
 
 #### `GET /users/{email}/photo`
-- **Purpose**: Retrieve binary user avatar image, falling back to `static/default_user.png`.
+- **Purpose**: Serve the user's avatar image directly from disk, falling back to `static/default_user.png`.
 
-#### `POST /users/profiles/append`
-- **Purpose**: Append an alternate profile display name to the user's `profile_names` array.
+#### `POST /users/{email}/photo`
+- **Purpose**: Upload or replace a user's profile photo. Saves to `static/uploads/users/`. Returns `photo_url`.
+- **Response**: Includes `photo_url` field.
 
 #### `POST /clients/{client_id}/photo`
-- **Purpose**: Upload a client avatar image. Manager+ permissions required.
+- **Purpose**: Upload a client avatar image. Saves to `static/uploads/clients/`. Manager+ permissions required.
+- **Note**: Clients can also be created with a photo by passing `photo_base64` + `photo_mime` in `POST /clients` or `client_photo_base64` in `POST /unified/create`. The server decodes the base64 string and saves it to disk.
 
 #### `GET /clients/{client_id}/photo`
-- **Purpose**: Fetch binary client photo, falling back to `static/default_client.png`.
+- **Purpose**: Serve client photo from disk, falling back to `static/default_client.png`.
 
 ---
 
@@ -518,6 +548,10 @@ To prevent collision of custom identifiers across distributed entries, the appli
 #### `POST /currency/usd-to-inr`
 - **Purpose**: Convert USD amount to INR using current rates.
 - **Body**: `{ "amount_usd": float }`
+
+#### `POST /currency/convert`
+- **Purpose**: Perform a generic currency conversion between any supported currencies (USD, INR, CNY, AED, SAR).
+- **Body**: `CurrencyConvertRequest` containing amount, from_currency, and to_currency.
 
 ---
 
@@ -563,12 +597,39 @@ To prevent collision of custom identifiers across distributed entries, the appli
 #### `GET /payments/pending-summary`
 - **Purpose**: Retrieve summary details and rankings of pending balances. Manager+ permissions required.
 
+#### `POST /orders/{order_db_id}/receipt/{phase}`
+- **Purpose**: Upload a payment receipt screenshot for a specific payment phase (1, 2, or 3). File is saved to `static/uploads/receipts/` on disk; the relative path is stored in the `orders` collection.
+- **Request Type**: `multipart/form-data`.
+- **Response**: Includes `receipt_url` with the relative path to the saved file.
+
+#### `GET /orders/{order_db_id}/receipt/{phase}`
+- **Purpose**: Serve the receipt image file directly from disk for the specified phase.
+
+#### `DELETE /orders/{order_db_id}/receipt/{phase}`
+- **Purpose**: Delete a previously uploaded payment receipt screenshot. Removes the file from disk and unsets the path field in MongoDB.
+
+---
+
+### Bank Account Management
+
+#### `GET /bank-accounts`
+- **Purpose**: Fetch all registered bank accounts (often used for frontend dropdowns).
+
+#### `POST /bank-accounts`
+- **Purpose**: Create a new bank account entry. Manager+ permissions required.
+
+#### `PUT /bank-accounts/{account_id}`
+- **Purpose**: Update an existing bank account. Manager+ permissions required.
+
+#### `DELETE /bank-accounts/{account_id}`
+- **Purpose**: Delete a bank account. Manager+ permissions required.
+
 ---
 
 ### Dashboard & Unified API
 
 #### `GET /dashboard/orders`
-- **Purpose**: Unified main dashboard endpoint. Executes an aggregation query linking client details, orders, and payment records into flat rows. Supported by caching layers.
+- **Purpose**: Unified main dashboard endpoint. Executes an aggregation query linking client details, orders, and payment records into flat rows. Supported by caching layers. **Injects `client_photo_url` and `receipt_phase_N_url` relative path strings** (previously base64 blobs) into each row for efficient frontend rendering.
 
 #### `PATCH /dashboard/orders/{order_db_id}`
 - **Purpose**: Batch update details (Client fields, Order fields, Payment phases) in a single request.
@@ -578,10 +639,11 @@ To prevent collision of custom identifiers across distributed entries, the appli
 - **Purpose**: Create Client, Order, Manuscript, and Payment documents in a single transaction-like request.
 - **Flow**:
   1. Checks if client exists by `client_id` or name; creates new client if missing.
-  2. Automatically links or creates a manuscript if specified.
-  3. Sequentially auto-generates order serial number (`s_no`) and unique system-wide `order_id`.
-  4. Automatically flows links (e.g., `payment_drive_link`) from client record to order if not overridden.
-  5. Optionally records initial payment details and updates client order count (`total_orders`).
+  2. If `client_photo_base64` is provided, decodes the base64 string, saves the file to `static/uploads/clients/`, and stores the path in MongoDB.
+  3. Automatically links or creates a manuscript if specified.
+  4. Sequentially auto-generates order serial number (`s_no`) and unique system-wide `order_id`.
+  5. Automatically flows links (e.g., `payment_drive_link`) from client record to order if not overridden.
+  6. Optionally records initial payment details and updates client order count (`total_orders`).
 
 ---
 
@@ -598,6 +660,15 @@ Endpoints `/dashboard/orders` and `/unified/create` reduce roundtrips. Instead o
 
 ### 4. Append-Only Payment Logs
 The `payment_history` collection captures snapshots of order totals, amounts paid, received accounts, and phase completions, building a clean transaction timeline.
+
+### 5. Filesystem Image Storage
+All binary image assets (user/client profile photos and payment receipt screenshots) are stored on the **server filesystem** under `static/uploads/`. MongoDB stores only the relative file path (e.g., `static/uploads/receipts/abc123.jpg`) rather than the binary blob. This approach:
+- **Eliminates** BSON 16 MB document size risk from large binary blobs
+- **Eliminates** expensive in-memory base64 encoding/decoding on every dashboard request
+- **Enables** browser-native HTTP caching of static image files
+- **Enables** direct CDN fronting of the `/static/` route in production
+- Photos are served via FastAPI's `StaticFiles` mount at `/static/uploads/{subfolder}/{filename}`
+- A **one-time migration script** (`migrate_images.py`) is included to move existing MongoDB binary blobs to disk
 
 ---
 
@@ -666,6 +737,8 @@ ALLOWED_ORIGINS=http://localhost:5173,https://my-dashboard.vercel.app
 
 *This document serves as the absolute architecture outline for the Email Dashboard API.*
 
-**Last Updated**: May 20, 2026  
-**API Version**: 1.0.0-Phase1  
-**Target Environment**: Vercel (Frontend) & Render/Docker (Backend)  
+**Last Updated**: May 28, 2026  
+**API Version**: 1.1.0-Phase1 (Image Storage Migration)  
+**Target Environment**: Vercel (Frontend) & Render/Docker (Backend)
+
+> **v1.1.0 Change Summary**: Migrated image storage from MongoDB binary blobs (`photo_data`, `receipt_phase_N_data`) to server filesystem (`static/uploads/`). All API responses now return URL path strings (`photo_url`, `receipt_phase_N_url`, `client_photo_url`) instead of base64-encoded data payloads. A `StaticFiles` mount at `/static` serves files publicly. Run `migrate_images.py` once to migrate existing data.

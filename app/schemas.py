@@ -51,8 +51,8 @@ class UserBase(BaseModel):
     id_range_start: Optional[int] = None
     id_range_end: Optional[int] = None
     has_photo: bool = False
-    photo_base64: Optional[str] = None   # base64-encoded user photo
-    photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
+    photo_url: Optional[str] = None      # Relative URL to photo file (e.g. static/uploads/users/abc.jpg)
+    photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg, kept for compatibility)
 
 
 class UserCreate(UserBase):
@@ -138,7 +138,7 @@ class UserDetailResponse(UserResponse):
     order_status_details: list[OrderStatusDetail] = []
     country_split: dict[str, float] = {}
     dashboard_stats: Optional[DashboardStats] = None
-    photo_base64: Optional[str] = None   # base64-encoded user photo
+    photo_url: Optional[str] = None      # Relative URL to photo file
     photo_mime: Optional[str] = None     # MIME type of the photo
 
 class Token(BaseModel):
@@ -206,7 +206,7 @@ class ClientBase(BaseModel):
     client_handler: Optional[str] = None  # Stores employee EMAIL (unique reference)
     client_handler_name: Optional[str] = None  # Resolved full name for display (not stored in DB)
     has_photo: bool = False
-    photo_base64: Optional[str] = None   # base64-encoded photo, None if no photo
+    photo_url: Optional[str] = None      # Relative URL to photo file, None if no photo
     photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
 
     @field_validator("email", "whatsapp_no", "client_ref_no", "client_link", "bank_account", "affiliation", mode="before")
@@ -289,12 +289,12 @@ class ClientOrderSummary(BaseModel):
     phase_3_payment: Optional[float] = 0.0
     phase_3_payment_date: Optional[datetime] = None
     phase_3_payment_details: Optional[str] = None
-    # Receipt screenshot images (base64 encoded, one per phase)
-    receipt_phase_1_base64: Optional[str] = None
+    # Receipt screenshot images (relative URL to file on server, one per phase)
+    receipt_phase_1_url: Optional[str] = None
     receipt_phase_1_mime: Optional[str] = None
-    receipt_phase_2_base64: Optional[str] = None
+    receipt_phase_2_url: Optional[str] = None
     receipt_phase_2_mime: Optional[str] = None
-    receipt_phase_3_base64: Optional[str] = None
+    receipt_phase_3_url: Optional[str] = None
     receipt_phase_3_mime: Optional[str] = None
 
     @field_validator(
@@ -317,7 +317,7 @@ class ClientFullResponse(ClientBase):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     client_handler_name: Optional[str] = None
     order_id_db: Optional[list[str]] = None
-    photo_base64: Optional[str] = None   # base64-encoded photo, None if no photo
+    photo_url: Optional[str] = None      # Relative URL to photo file
     photo_mime: Optional[str] = None     # MIME type of the photo (e.g. image/jpeg)
     orders: list[ClientOrderSummary] = []
 
@@ -520,14 +520,14 @@ class DashboardOrderResponse(BaseModel):
     total_amount_usd: float = 0.0
     paid_amount_usd: float = 0.0
     is_new_order: Optional[str] = "yes"
-    client_photo_base64: Optional[str] = None  # client photo encoded as base64
+    client_photo_url: Optional[str] = None     # Relative URL to client photo file
     client_photo_mime: Optional[str] = None    # MIME type e.g. image/jpeg
-    # Receipt screenshot images (base64 encoded, one per phase)
-    receipt_phase_1_base64: Optional[str] = None
+    # Receipt screenshot images (relative URL to file on server, one per phase)
+    receipt_phase_1_url: Optional[str] = None
     receipt_phase_1_mime: Optional[str] = None
-    receipt_phase_2_base64: Optional[str] = None
+    receipt_phase_2_url: Optional[str] = None
     receipt_phase_2_mime: Optional[str] = None
-    receipt_phase_3_base64: Optional[str] = None
+    receipt_phase_3_url: Optional[str] = None
     receipt_phase_3_mime: Optional[str] = None
 
 
@@ -629,6 +629,10 @@ class UnifiedCreateRequest(BaseModel):
     client_affiliation: Optional[str] = None
     bank_account: Optional[str] = None
     
+    # Photo fields
+    client_photo_base64: Optional[str] = None
+    client_photo_mime: Optional[str] = None
+
     # Order fields
     receive_bank_account: Optional[str] = None
     client_order_type: Optional[str] = None  # For client

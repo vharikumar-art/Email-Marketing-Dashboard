@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timedelta
 from app.schemas import (
     UserCreate, 
@@ -100,6 +101,12 @@ app.add_middleware(
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# --- STATIC FILE SERVING ---
+os.makedirs(os.path.join("static", "uploads", "users"), exist_ok=True)
+os.makedirs(os.path.join("static", "uploads", "clients"), exist_ok=True)
+os.makedirs(os.path.join("static", "uploads", "receipts"), exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- PERFORMANCE MONITORING MIDDLEWARE ---
 class PerformanceMiddleware(BaseHTTPMiddleware):
@@ -202,6 +209,48 @@ def format_mongo_id(doc):
     if doc and "_id" in doc:
         doc["_id"] = str(doc["_id"])
     return doc
+
+import uuid
+
+async def save_upload_file(upload_file, subfolder: str) -> str:
+    """
+    Save an UploadFile to static/uploads/{subfolder}/ and return the relative path.
+    The returned path is what gets stored in MongoDB.
+    """
+    ext = os.path.splitext(upload_file.filename or "")[1]
+    if not ext:
+        # Derive extension from MIME type if filename has none
+        mime = getattr(upload_file, "content_type", "") or ""
+        ext = ".jpg" if "jpeg" in mime else ".png" if "png" in mime else ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    dir_path = os.path.join("static", "uploads", subfolder)
+    os.makedirs(dir_path, exist_ok=True)
+    file_path = os.path.join(dir_path, filename)
+    content = await upload_file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+    return f"static/uploads/{subfolder}/{filename}"
+
+def save_bytes_to_file(content: bytes, mime: str, subfolder: str) -> str:
+    """
+    Save raw bytes (e.g. decoded base64) to static/uploads/{subfolder}/ and return the relative path.
+    """
+    ext = ".jpg" if "jpeg" in mime else ".png" if "png" in mime else ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    dir_path = os.path.join("static", "uploads", subfolder)
+    os.makedirs(dir_path, exist_ok=True)
+    file_path = os.path.join(dir_path, filename)
+    with open(file_path, "wb") as f:
+        f.write(content)
+    return f"static/uploads/{subfolder}/{filename}"
+
+def delete_file_if_exists(path: Optional[str]):
+    """Remove a file from the filesystem if it exists (called before replacing or deleting images)."""
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 def parse_date(date_str: Any) -> Optional[datetime]:
     """Helper to convert string dates to datetime objects for MongoDB."""
@@ -775,13 +824,9 @@ def get_all_users(current_user: dict = Depends(require_manager_or_higher)):
         u["_id"] = str(u["_id"])
         # Decrypt password for display
         u["password"] = decrypt_password(u.get("password", ""))
-        raw_photo = u.pop("photo_data", None)
-        if raw_photo:
-            u["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
-            u["photo_mime"] = u.get("photo_mime", "image/png")
-        else:
-            u["photo_base64"] = None
-            u["photo_mime"] = None
+        # Remove raw binary if any legacy data exists; serve URL instead
+        u.pop("photo_data", None)
+        u["photo_url"] = u.get("photo_path") or None
     return {
         "status_code": 200,
         "status": "success",
@@ -801,13 +846,9 @@ def get_all_admins(current_user: dict = Depends(require_admin)):
         a["_id"] = str(a["_id"])
         # Decrypt password for display
         a["password"] = decrypt_password(a.get("password", ""))
-        raw_photo = a.pop("photo_data", None)
-        if raw_photo:
-            a["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
-            a["photo_mime"] = a.get("photo_mime", "image/png")
-        else:
-            a["photo_base64"] = None
-            a["photo_mime"] = None
+        # Remove raw binary if any legacy data exists; serve URL instead
+        a.pop("photo_data", None)
+        a["photo_url"] = a.get("photo_path") or None
     return {
         "status_code": 200,
         "status": "success",
@@ -889,7 +930,14 @@ async def update_user_profile(
         content = await photo.read()
         if len(content) > 500 * 1024:  # 500KB limit
             raise HTTPException(status_code=400, detail="Image size must be less than 500KB")
-        update_dict["photo_data"] = Binary(content)
+        # Delete old photo file if it exists
+        old_user = users_collection.find_one({"email": target_email})
+        if old_user:
+            delete_file_if_exists(old_user.get("photo_path"))
+        # Save new photo to filesystem
+        await photo.seek(0)
+        photo_path = await save_upload_file(photo, "users")
+        update_dict["photo_path"] = photo_path
         update_dict["photo_mime"] = photo.content_type
         update_dict["has_photo"] = True
         
@@ -901,9 +949,10 @@ async def update_user_profile(
     if not updated_user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # Remove binary data from JSON response to prevent serialization error
-    if "photo_data" in updated_user:
-        updated_user.pop("photo_data")
+    # Remove legacy binary data from response
+    updated_user.pop("photo_data", None)
+    # Inject photo_url for response
+    updated_user["photo_url"] = updated_user.get("photo_path") or None
         
     # Decrypt password for schema consistency
     if "password" in updated_user:
@@ -922,14 +971,17 @@ async def update_user_profile(
 @app.get("/users/{email}/photo")
 def get_user_photo(email: str):
     user = users_collection.find_one({"email": email})
-    if user and user.get("photo_data"):
-        return Response(content=user["photo_data"], media_type=user.get("photo_mime", "image/png"))
+    if user:
+        photo_path = user.get("photo_path")
+        if photo_path and os.path.exists(photo_path):
+            from fastapi.responses import FileResponse
+            return FileResponse(photo_path, media_type=user.get("photo_mime", "image/png"))
         
     # Fallback to static default avatar
     default_path = "static/default_user.png"
     if os.path.exists(default_path):
-        with open(default_path, "rb") as f:
-            return Response(content=f.read(), media_type="image/png")
+        from fastapi.responses import FileResponse
+        return FileResponse(default_path, media_type="image/png")
     return Response(content=b"", status_code=404)
 
 @app.post("/users/{email}/photo", status_code=200)
@@ -942,6 +994,7 @@ async def upload_user_photo(
     Upload or update a user's profile photo.
     The authenticated user can update their own photo.
     Admin and Manager can update any user's photo.
+    Saves file to static/uploads/users/ and stores the path in MongoDB.
     """
     # Allow self-update OR manager/admin updating any user
     if current_user["email"] != email and current_user.get("role") not in [UserRole.ADMIN, UserRole.MANAGER]:
@@ -958,15 +1011,22 @@ async def upload_user_photo(
     if len(content) > 500 * 1024:  # 500 KB limit
         raise HTTPException(status_code=400, detail="Image size must be less than 500 KB")
 
+    # Delete old photo file if it exists
+    delete_file_if_exists(target.get("photo_path"))
+
+    # Save to filesystem
+    await file.seek(0)
+    photo_path = await save_upload_file(file, "users")
+
     users_collection.update_one(
         {"email": email},
         {"$set": {
-            "photo_data": Binary(content),
+            "photo_path": photo_path,
             "photo_mime": file.content_type,
             "has_photo": True
         }}
     )
-    return {"status": "success", "message": f"Photo updated for {email}"}
+    return {"status": "success", "message": f"Photo updated for {email}", "photo_url": photo_path}
 
 @app.post("/clients/{client_id}/photo", status_code=200)
 async def upload_client_photo(
@@ -979,28 +1039,40 @@ async def upload_client_photo(
     content = await file.read()
     if len(content) > 500 * 1024:  # 500KB limit
         raise HTTPException(status_code=400, detail="Image size must be less than 500KB")
-        
+
+    # Delete old photo file
+    existing = clients_collection.find_one({"client_id": client_id})
+    if existing:
+        delete_file_if_exists(existing.get("photo_path"))
+
+    # Save to filesystem
+    await file.seek(0)
+    photo_path = await save_upload_file(file, "clients")
+
     clients_collection.update_one(
         {"client_id": client_id},
         {"$set": {
-            "photo_data": Binary(content),
+            "photo_path": photo_path,
             "photo_mime": file.content_type,
             "has_photo": True
         }}
     )
-    return {"status": "success", "message": "Client photo uploaded successfully"}
+    return {"status": "success", "message": "Client photo uploaded successfully", "photo_url": photo_path}
 
 @app.get("/clients/{client_id}/photo")
 def get_client_photo(client_id: str):
     client_doc = clients_collection.find_one({"client_id": client_id})
-    if client_doc and client_doc.get("photo_data"):
-        return Response(content=client_doc["photo_data"], media_type=client_doc.get("photo_mime", "image/png"))
+    if client_doc:
+        photo_path = client_doc.get("photo_path")
+        if photo_path and os.path.exists(photo_path):
+            from fastapi.responses import FileResponse
+            return FileResponse(photo_path, media_type=client_doc.get("photo_mime", "image/png"))
         
     # Fallback to static default client avatar
     default_path = "static/default_client.png"
     if os.path.exists(default_path):
-        with open(default_path, "rb") as f:
-            return Response(content=f.read(), media_type="image/png")
+        from fastapi.responses import FileResponse
+        return FileResponse(default_path, media_type="image/png")
     return Response(content=b"", status_code=404)
 
 # --- RECEIPT SCREENSHOT ENDPOINTS ---
@@ -1015,7 +1087,7 @@ async def upload_receipt_screenshot(
     """
     Upload a payment receipt screenshot for an order phase (1, 2, or 3).
     - Validates image MIME type, enforces 2 MB size limit
-    - Stores as Binary blob + MIME type in orders collection
+    - Saves file to static/uploads/receipts/ and stores path in orders collection
     - Clears dashboard cache after successful upload
     """
     from app.cache import clear_dashboard_cache
@@ -1041,11 +1113,19 @@ async def upload_receipt_screenshot(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Store receipt
+    # Delete old receipt file if it exists
+    old_path = order.get(f"receipt_phase_{phase}_path")
+    delete_file_if_exists(old_path)
+
+    # Save to filesystem
+    await file.seek(0)
+    receipt_path = await save_upload_file(file, "receipts")
+
+    # Store receipt path in DB
     orders_collection.update_one(
         {"_id": ObjectId(order_db_id)},
         {"$set": {
-            f"receipt_phase_{phase}_data": Binary(content),
+            f"receipt_phase_{phase}_path": receipt_path,
             f"receipt_phase_{phase}_mime": file.content_type
         }}
     )
@@ -1055,15 +1135,17 @@ async def upload_receipt_screenshot(
     
     return {
         "status": "success",
-        "message": f"Receipt screenshot for phase {phase} uploaded successfully"
+        "message": f"Receipt screenshot for phase {phase} uploaded successfully",
+        "receipt_url": receipt_path
     }
 
 @app.get("/orders/{order_db_id}/receipt/{phase}")
 def get_receipt_screenshot(order_db_id: str, phase: int):
     """
     Download/serve a payment receipt screenshot for an order phase.
-    Returns binary image with appropriate MIME type, or 404 if not found.
+    Returns the image file from disk, or 404 if not found.
     """
+    from fastapi.responses import FileResponse
     # Validate phase
     if phase not in (1, 2, 3):
         raise HTTPException(status_code=400, detail="Phase must be 1, 2, or 3")
@@ -1076,12 +1158,12 @@ def get_receipt_screenshot(order_db_id: str, phase: int):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    receipt_data = order.get(f"receipt_phase_{phase}_data")
-    if not receipt_data:
+    receipt_path = order.get(f"receipt_phase_{phase}_path")
+    if not receipt_path or not os.path.exists(receipt_path):
         raise HTTPException(status_code=404, detail=f"No receipt found for phase {phase}")
     
     receipt_mime = order.get(f"receipt_phase_{phase}_mime", "image/png")
-    return Response(content=receipt_data, media_type=receipt_mime)
+    return FileResponse(receipt_path, media_type=receipt_mime)
 
 @app.delete("/orders/{order_db_id}/receipt/{phase}", status_code=200)
 def delete_receipt_screenshot(
@@ -1091,7 +1173,7 @@ def delete_receipt_screenshot(
 ):
     """
     Delete a payment receipt screenshot from an order phase.
-    Removes both the binary data and MIME type fields.
+    Removes the file from disk and unsets the path field in MongoDB.
     """
     from app.cache import clear_dashboard_cache
     
@@ -1108,11 +1190,15 @@ def delete_receipt_screenshot(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Delete receipt
+    # Delete file from filesystem
+    old_path = order.get(f"receipt_phase_{phase}_path")
+    delete_file_if_exists(old_path)
+
+    # Remove path from DB
     orders_collection.update_one(
         {"_id": ObjectId(order_db_id)},
         {"$unset": {
-            f"receipt_phase_{phase}_data": "",
+            f"receipt_phase_{phase}_path": "",
             f"receipt_phase_{phase}_mime": ""
         }}
     )
@@ -1430,16 +1516,10 @@ def get_own_details(current_user: dict = Depends(get_current_user)):
     dashboard_data = get_user_dashboard_data(client_match)
     
     # 3. Format user profile — strip raw binary before JSON serialisation
-    import base64
     user_data = format_mongo_id(current_user.copy())
     user_data["password"] = decrypt_password(user_data.get("password", ""))
-    raw_photo = user_data.pop("photo_data", None)
-    if raw_photo:
-        user_data["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
-        user_data["photo_mime"] = user_data.get("photo_mime", "image/png")
-    else:
-        user_data["photo_base64"] = None
-        user_data["photo_mime"] = None
+    user_data.pop("photo_data", None)
+    user_data["photo_url"] = user_data.get("photo_path") or None
     
     # 4. Merge dashboard data into user response
     user_data.update(dashboard_data)
@@ -1468,16 +1548,10 @@ def get_user_details(email: str, current_user: dict = Depends(require_manager_or
     dashboard_data = get_user_dashboard_data(client_match)
     
     # 3. Format target user profile — strip raw binary before JSON serialisation
-    import base64
     user_data = format_mongo_id(target_user)
     user_data["password"] = decrypt_password(user_data.get("password", ""))
-    raw_photo = user_data.pop("photo_data", None)
-    if raw_photo:
-        user_data["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
-        user_data["photo_mime"] = user_data.get("photo_mime", "image/png")
-    else:
-        user_data["photo_base64"] = None
-        user_data["photo_mime"] = None
+    user_data.pop("photo_data", None)
+    user_data["photo_url"] = user_data.get("photo_path") or None
     
     # 4. Merge dashboard data into user response
     user_data.update(dashboard_data)
@@ -1512,6 +1586,24 @@ def create_client(client: ClientCreate, current_user: dict = Depends(get_current
             client_dict["client_handler"] = None
     # Remove display-only field before saving to DB
     client_dict.pop("client_handler_name", None)
+            
+    # Process base64 photo — decode and save to disk
+    photo_b64 = client_dict.pop("photo_base64", None)
+    client_dict.pop("photo_url", None)  # remove schema field before DB insert
+    if photo_b64:
+        try:
+            import base64
+            if "," in photo_b64:
+                photo_b64 = photo_b64.split(",")[1]
+            photo_bytes = base64.b64decode(photo_b64)
+            mime = client_dict.get("photo_mime") or "image/png"
+            photo_path = save_bytes_to_file(photo_bytes, mime, "clients")
+            client_dict["photo_path"] = photo_path
+            client_dict["has_photo"] = True
+            client_dict["photo_mime"] = mime
+        except Exception:
+            client_dict["has_photo"] = False
+            client_dict.pop("photo_mime", None)
             
     client_dict["created_at"] = datetime.utcnow()
     result = clients_collection.insert_one(client_dict)
@@ -1626,14 +1718,10 @@ def get_client(client_id: str, current_user: dict = Depends(require_manager_or_h
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # --- 2. Embed photo as base64 (strip raw binary before serialisation) ---
-    raw_photo = client.pop("photo_data", None)
-    if raw_photo:
-        client["photo_base64"] = base64.b64encode(bytes(raw_photo)).decode("utf-8")
-        client["photo_mime"] = client.get("photo_mime", "image/png")
-    else:
-        client["photo_base64"] = None
-        client["photo_mime"] = None
+    # --- 2. Inject photo URL (use path stored in DB) ---
+    client.pop("photo_data", None)  # remove legacy binary if any
+    client["photo_url"] = client.get("photo_path") or None
+    client["photo_mime"] = client.get("photo_mime")
 
     # --- 3. Fetch all orders for this client ---
     raw_orders = list(orders_collection.find({"client_id": client_id}))
@@ -1687,16 +1775,15 @@ def get_client(client_id: str, current_user: dict = Depends(require_manager_or_h
             "phase_3_payment_details":   payment.get("phase_3_payment_details"),
         }
         
-        # Inject receipt screenshots for each phase (encoded as base64)
+        # Inject receipt screenshot URLs for each phase (path stored in DB)
         for phase in (1, 2, 3):
-            receipt_data = order.get(f"receipt_phase_{phase}_data")
+            receipt_path = order.get(f"receipt_phase_{phase}_path")
             receipt_mime = order.get(f"receipt_phase_{phase}_mime", "image/png")
-            
-            if receipt_data:
-                order_dict[f"receipt_phase_{phase}_base64"] = base64.b64encode(bytes(receipt_data)).decode("utf-8")
+            if receipt_path and os.path.exists(receipt_path):
+                order_dict[f"receipt_phase_{phase}_url"] = receipt_path
                 order_dict[f"receipt_phase_{phase}_mime"] = receipt_mime
             else:
-                order_dict[f"receipt_phase_{phase}_base64"] = None
+                order_dict[f"receipt_phase_{phase}_url"] = None
                 order_dict[f"receipt_phase_{phase}_mime"] = None
         
         orders_out.append(order_dict)
@@ -2184,27 +2271,22 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
     # Resolve handler names for display in bulk
     resolve_client_handler_bulk(dashboard_data)
 
-    # Attach client photo as base64 for each row
-    import base64
+    # Attach client photo URL for each row
     client_ids = list({row["client_id"] for row in dashboard_data if row.get("client_id")})
     photo_map = {}
     for client_doc in clients_collection.find(
         {"client_id": {"$in": client_ids}},
-        {"client_id": 1, "photo_data": 1, "photo_mime": 1}
+        {"client_id": 1, "photo_path": 1, "photo_mime": 1}
     ):
-        raw = client_doc.get("photo_data")
-        if raw:
-            photo_map[client_doc["client_id"]] = {
-                "photo_base64": base64.b64encode(bytes(raw)).decode("utf-8"),
-                "photo_mime":   client_doc.get("photo_mime", "image/png")
-            }
-        else:
-            photo_map[client_doc["client_id"]] = {"photo_base64": None, "photo_mime": None}
+        photo_map[client_doc["client_id"]] = {
+            "photo_url":  client_doc.get("photo_path") or None,
+            "photo_mime": client_doc.get("photo_mime")
+        }
 
-    # Attach receipt screenshots as base64 for each row
-    # Collect all order_db_ids that have receipts
+    # Attach receipt screenshot URLs for each row
+    # Collect all order_db_ids
     order_db_ids = list({row["order_db_id"] for row in dashboard_data if row.get("order_db_id")})
-    receipt_map = {}  # Maps order_db_id -> {phase -> {base64, mime}}
+    receipt_map = {}  # Maps order_db_id -> {phase -> {url, mime}}
     
     if order_db_ids:
         # Convert string IDs back to ObjectId for querying
@@ -2215,31 +2297,31 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
             except:
                 pass
         
-        # Query orders for receipt fields
+        # Query orders for receipt path fields only (no binary data needed)
         for order_doc in orders_collection.find(
             {"_id": {"$in": order_object_ids}},
             {
                 "_id": 1,
-                "receipt_phase_1_data": 1, "receipt_phase_1_mime": 1,
-                "receipt_phase_2_data": 1, "receipt_phase_2_mime": 1,
-                "receipt_phase_3_data": 1, "receipt_phase_3_mime": 1
+                "receipt_phase_1_path": 1, "receipt_phase_1_mime": 1,
+                "receipt_phase_2_path": 1, "receipt_phase_2_mime": 1,
+                "receipt_phase_3_path": 1, "receipt_phase_3_mime": 1
             }
         ):
             order_id_str = str(order_doc["_id"])
             receipt_map[order_id_str] = {}
             
             for phase in (1, 2, 3):
-                receipt_data = order_doc.get(f"receipt_phase_{phase}_data")
+                receipt_path = order_doc.get(f"receipt_phase_{phase}_path")
                 receipt_mime = order_doc.get(f"receipt_phase_{phase}_mime", "image/png")
                 
-                if receipt_data:
+                if receipt_path and os.path.exists(receipt_path):
                     receipt_map[order_id_str][phase] = {
-                        "base64": base64.b64encode(bytes(receipt_data)).decode("utf-8"),
+                        "url": receipt_path,
                         "mime": receipt_mime
                     }
                 else:
                     receipt_map[order_id_str][phase] = {
-                        "base64": None,
+                        "url": None,
                         "mime": None
                     }
 
@@ -2260,20 +2342,20 @@ def get_dashboard_orders(current_user: dict = Depends(get_current_user)):
 
     for row in dashboard_data:
         info = photo_map.get(row.get("client_id"), {})
-        row["client_photo_base64"] = info.get("photo_base64")
-        row["client_photo_mime"]   = info.get("photo_mime")
+        row["client_photo_url"]  = info.get("photo_url")
+        row["client_photo_mime"] = info.get("photo_mime")
         
-        # Inject receipt screenshots for this order
+        # Inject receipt screenshot URLs for this order
         order_id_str = row.get("order_db_id")
         if order_id_str and order_id_str in receipt_map:
             for phase in (1, 2, 3):
                 phase_receipt = receipt_map[order_id_str].get(phase, {})
-                row[f"receipt_phase_{phase}_base64"] = phase_receipt.get("base64")
+                row[f"receipt_phase_{phase}_url"]  = phase_receipt.get("url")
                 row[f"receipt_phase_{phase}_mime"] = phase_receipt.get("mime")
         else:
             # No receipts for this order
             for phase in (1, 2, 3):
-                row[f"receipt_phase_{phase}_base64"] = None
+                row[f"receipt_phase_{phase}_url"]  = None
                 row[f"receipt_phase_{phase}_mime"] = None
         
         # Calculate USD equivalents dynamically
@@ -2471,11 +2553,28 @@ def create_unified_record(request: UnifiedCreateRequest, current_user: dict = De
             "affiliation": request.client_affiliation,
             "payment_drive_link": request.payment_drive_link,
             "client_drive_link": request.client_drive_link,
-            "client_drive_link": request.client_drive_link,
             "total_orders": 0,
             "client_handler": current_user.get("email") if current_user["role"] == UserRole.EMPLOYEE else get_user_email_by_name(request.client_handler),
-            "created_at": datetime.utcnow()
+            "created_at": datetime.utcnow(),
+            "has_photo": False
         }
+
+        # Process base64 photo if provided — decode and save to disk
+        if request.client_photo_base64:
+            try:
+                import base64
+                photo_b64 = request.client_photo_base64
+                if "," in photo_b64:
+                    photo_b64 = photo_b64.split(",")[1]
+                photo_bytes = base64.b64decode(photo_b64)
+                mime = request.client_photo_mime or "image/png"
+                photo_path = save_bytes_to_file(photo_bytes, mime, "clients")
+                client_data["photo_path"] = photo_path
+                client_data["has_photo"] = True
+                client_data["photo_mime"] = mime
+            except Exception:
+                pass
+
         clients_collection.insert_one(client_data)
         client_id = request.client_id
         client_payment_drive_link = request.payment_drive_link

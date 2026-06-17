@@ -205,7 +205,8 @@ curl -X POST http://localhost:8000/users/newuser@example.com/photo \
 ```json
 {
   "status": "success",
-  "message": "Photo updated for newuser@example.com"
+  "message": "Photo updated for newuser@example.com",
+  "photo_url": "static/uploads/users/a1b2c3d4e5f6.jpg"
 }
 ```
 
@@ -260,7 +261,8 @@ curl -X GET http://localhost:8000/users/me/details \
     "email": "emp@example.com",
     "full_name": "John Doe",
     "role": "employee",
-    "photo_base64": "iVBORw0KGgoAAAANS...",
+    "has_photo": true,
+    "photo_url": "static/uploads/users/a1b2c3d4e5f6.jpg",
     "photo_mime": "image/jpeg",
     "dashboard_stats": {
       "total_amount": 15000.50,
@@ -279,6 +281,11 @@ curl -X GET http://localhost:8000/users/me/details \
   }
 }
 ```
+
+> **Displaying the photo:**
+> ```html
+> <img src="http://localhost:8000/{photo_url}" alt="User Photo" />
+> ```
 
 ---
 
@@ -321,8 +328,13 @@ curl -X POST http://localhost:8000/clients \
     "bank_account": "1234567890",
     "affiliation": "Academic",
     "payment_drive_link": "https://drive.google.com/...",
-    "client_drive_link": "https://drive.google.com/..."
+    "client_drive_link": "https://drive.google.com/...",
+    "photo_base64": "data:image/jpeg;base64,/9j/4AAQSkZ...",
+    "photo_mime": "image/jpeg"
   }'
+```
+
+> **Note:** `photo_base64` in the create body is still accepted as a **base64-encoded string**. The server decodes it and saves it to disk, storing the resulting `photo_path` in MongoDB. The response does not echo the base64 back; instead use `GET /clients/{client_id}` to get the `photo_url`.
 ```
 
 **Response:**
@@ -421,7 +433,8 @@ curl -X GET http://localhost:8000/clients/CLT001 \
     "name": "Acme Corporation",
     "country": "USA",
     "email": "contact@acme.com",
-    "photo_base64": "iVBORw0KGgoAAAANS...",
+    "has_photo": true,
+    "photo_url": "static/uploads/clients/b1c2d3e4f5a6.jpg",
     "photo_mime": "image/jpeg",
     "orders": [
       {
@@ -433,17 +446,26 @@ curl -X GET http://localhost:8000/clients/CLT001 \
         "phase_1_payment": 2500.00,
         "phase_1_payment_date": "2026-01-15T10:30:00",
         "phase_1_payment_details": "Phase 1 complete",
-        "receipt_phase_1_base64": "iVBORw0KGgoAAAANS...",
+        "receipt_phase_1_url": "static/uploads/receipts/c1d2e3f4a5b6.jpg",
         "receipt_phase_1_mime": "image/jpeg",
-        "receipt_phase_2_base64": null,
+        "receipt_phase_2_url": null,
         "receipt_phase_2_mime": null,
-        "receipt_phase_3_base64": null,
+        "receipt_phase_3_url": null,
         "receipt_phase_3_mime": null
       }
     ]
   }
 }
 ```
+
+> **Displaying photos and receipts:**
+> ```html
+> <!-- Client photo -->
+> <img src="http://localhost:8000/{photo_url}" alt="Client" />
+>
+> <!-- Receipt screenshot -->
+> <img src="http://localhost:8000/{receipt_phase_1_url}" alt="Receipt Phase 1" />
+> ```
 
 ---
 
@@ -565,7 +587,8 @@ curl -X POST http://localhost:8000/orders/65f1a2b3c4d5e6f7a8b9c0d1/receipt/1 \
 ```json
 {
   "status": "success",
-  "message": "Receipt screenshot for phase 1 uploaded successfully"
+  "message": "Receipt screenshot for phase 1 uploaded successfully",
+  "receipt_url": "static/uploads/receipts/c1d2e3f4a5b6.jpg"
 }
 ```
 
@@ -649,7 +672,7 @@ curl -X DELETE http://localhost:8000/orders/65f1a2b3c4d5e6f7a8b9c0d1/receipt/1 \
 ## 5.4 View Receipts in Dashboard
 **Endpoint:** `GET /dashboard/orders`
 
-**Purpose:** Get all orders with receipts automatically embedded as base64
+**Purpose:** Get all orders with receipt URLs automatically injected for each phase
 
 **Auth Required:** Yes
 
@@ -674,27 +697,33 @@ curl -X GET http://localhost:8000/dashboard/orders \
       "paid_amount": 2500.00,
       "phase_1_payment": 2500.00,
       "phase_1_payment_date": "2026-01-15T10:30:00",
-      "receipt_phase_1_base64": "iVBORw0KGgoAAAANS...",
+      "receipt_phase_1_url": "static/uploads/receipts/c1d2e3f4a5b6.jpg",
       "receipt_phase_1_mime": "image/jpeg",
-      "receipt_phase_2_base64": null,
+      "receipt_phase_2_url": null,
       "receipt_phase_2_mime": null,
-      "receipt_phase_3_base64": null,
+      "receipt_phase_3_url": null,
       "receipt_phase_3_mime": null,
-      "client_photo_base64": "iVBORw0KGgoAAAANS..."
+      "client_photo_url": "static/uploads/clients/b1c2d3e4f5a6.jpg",
+      "client_photo_mime": "image/jpeg"
     }
   ]
 }
 ```
 
 **Front-End Usage:**
-To display receipt in HTML:
+All image fields are now **relative URL paths**. Prepend the API base URL:
 ```html
-<!-- Display receipt image inline -->
-<img src="data:image/jpeg;base64,{receipt_phase_1_base64}" alt="Receipt Phase 1" />
+<!-- Client photo -->
+<img src="http://localhost:8000/{client_photo_url}" alt="Client" />
 
-<!-- Or use MIME type dynamically -->
-<img src="data:{receipt_phase_1_mime};base64,{receipt_phase_1_base64}" alt="Receipt" />
+<!-- Receipt screenshot -->
+<img src="http://localhost:8000/{receipt_phase_1_url}" alt="Receipt Phase 1" />
 ```
+
+> **Alternative:** Use the static file endpoint directly:
+> ```
+> GET http://localhost:8000/static/uploads/receipts/c1d2e3f4a5b6.jpg
+> ```
 
 ---
 
@@ -875,6 +904,11 @@ curl -X POST http://localhost:8000/unified/create \
     "client_name": "Beta Research Inc",
     "client_country": "Canada",
     "client_email": "contact@betaresearch.com",
+    "client_photo_base64": "data:image/jpeg;base64,/9j/4AAQSkZ...",
+    "client_photo_mime": "image/jpeg",
+```
+
+> **Note:** `client_photo_base64` is still accepted as a base64 string in the request body. The server decodes it, saves the file to disk, and stores the path in MongoDB. To display the photo after creation, use the returned `photo_url` from `GET /clients/{client_id}` or `GET /dashboard/orders`.
     "reference_id": "REF-2026-002",
     "title": "Machine Learning Study",
     "total_amount": 8000.00,
@@ -968,7 +1002,12 @@ curl -X POST http://localhost:8000/unified/create \
 
 6. **View Dashboard** → `GET {{base_url}}/dashboard/orders`
    - Headers: `Authorization: Bearer {{auth_token}}`
-   - Receipts auto-included as base64
+   - Receipt and photo URLs are included as relative path strings
+   - Display with: `<img src="{{base_url}}/{receipt_phase_1_url}" />`
+
+7. **Access Static Image Directly** → `GET {{base_url}}/static/uploads/receipts/{filename}`
+   - No auth required
+   - Returns the raw image file
 
 ---
 
@@ -979,7 +1018,8 @@ curl -X POST http://localhost:8000/unified/create \
 | `401 Unauthorized` | Invalid/missing token | Login again, copy token to Authorization header |
 | `403 Forbidden` | Insufficient permissions | Use Admin/Manager account for restricted endpoints |
 | `404 Not Found` | Invalid ID or endpoint | Verify correct ID format and endpoint path |
-| `400 Bad Request - Image size` | File > 500KB (user) or 2MB (receipt) | Compress image or use smaller file |
+| `404 Not Found` on image URL | File deleted from server disk | Re-upload the image via the photo/receipt endpoint |
+| `400 Bad Request - Image size` | File > 500KB (user/client) or 2MB (receipt) | Compress image or use smaller file |
 | `400 Bad Request - File must be image` | Wrong file type (not JPEG/PNG) | Upload valid image format |
 | `413 Payload Too Large` | Request body too large | Split large requests into smaller ones |
 
@@ -989,21 +1029,67 @@ curl -X POST http://localhost:8000/unified/create \
 
 - **No strict rate limiting** but avoid >100 requests/sec
 - **Batch operations** when possible (use `/dashboard/orders` instead of individual queries)
-- **Cache responses** client-side (photos, receipts don't change frequently)
+- **Cache image URLs** client-side (photos, receipts don't change frequently; URLs are stable)
+- **Use `<img src>` with URL**, not inline base64 — browsers cache static files efficiently
 - **Use pagination** for large result sets (future enhancement)
 - **Always validate file size** before uploading
 
 ---
 
-# 12. TESTING CHECKLIST
+# 12. STATIC FILE SERVING
+
+Images are stored on the server filesystem and served via FastAPI's `StaticFiles` mount.
+
+**Base static URL:** `GET /static/uploads/{subfolder}/{filename}`
+
+| Subfolder | Content | Example URL |
+| :--- | :--- | :--- |
+| `users/` | User profile photos | `/static/uploads/users/a1b2c3.jpg` |
+| `clients/` | Client photos | `/static/uploads/clients/b2c3d4.jpg` |
+| `receipts/` | Payment receipt screenshots | `/static/uploads/receipts/c3d4e5.jpg` |
+
+**Auth Required:** No (publicly accessible)
+
+**Example:**
+```bash
+curl http://localhost:8000/static/uploads/clients/b2c3d4.jpg -o client.jpg
+```
+
+> **Important for deployment:** The `static/uploads/` directory must exist on a **persistent volume**. If you deploy to a stateless platform (Heroku, Vercel serverless), uploaded files will be lost on restart. Use a persistent disk (Render Disk, Docker volume, or AWS S3) for production.
+
+---
+
+# 13. MIGRATION NOTE
+
+If upgrading from a version that stored photos as MongoDB binary blobs, run the one-time migration script:
+
+```bash
+# From the project root
+python migrate_images.py
+```
+
+This script:
+- Extracts all `photo_data` binary blobs from `users` and `clients` collections
+- Extracts all `receipt_phase_N_data` blobs from `orders` collection
+- Saves them as files to `static/uploads/{users|clients|receipts}/`
+- Updates MongoDB documents with the new `photo_path` / `receipt_phase_N_path` fields
+- Removes the old binary fields
+
+After migration, restart the server. All existing images will be available at their new URLs.
+
+---
+
+# 14. TESTING CHECKLIST
 
 - [ ] Login and get auth token
-- [ ] Create a test user with photo upload
-- [ ] Create a test client with photo upload
+- [ ] Create a test user, then upload photo → verify `photo_url` in response
+- [ ] Create a test client with `photo_base64` in body → verify photo is saved to disk
+- [ ] Upload client photo via `POST /clients/{id}/photo` → verify `photo_url` in response
 - [ ] Create a test order
-- [ ] Upload receipt screenshot for phase 1
-- [ ] View receipt via GET endpoint
-- [ ] View dashboard (check receipt_base64 fields)
-- [ ] View client details (check receipt fields in orders)
-- [ ] Delete receipt screenshot
+- [ ] Upload receipt screenshot for phase 1 → verify `receipt_url` in response
+- [ ] View receipt via `GET /orders/{id}/receipt/1` → verify image is served
+- [ ] Access static file directly: `GET /static/uploads/receipts/{filename}`
+- [ ] View dashboard → check `receipt_phase_1_url` and `client_photo_url` fields
+- [ ] View client details → check `photo_url` and `receipt_phase_N_url` in orders
+- [ ] Delete receipt screenshot → verify file removed from disk
 - [ ] Update order via PATCH endpoint

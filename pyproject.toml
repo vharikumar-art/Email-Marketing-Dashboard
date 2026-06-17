@@ -18,4 +18,5 @@ dependencies = [
     "cachetools>=5.3.0",
     "redis>=4.5.0",
     "aiosmtplib>=2.0.0",
+    "dotenv>=0.9.9",
 ]
